@@ -1,0 +1,160 @@
+CMO RL OBSERVATION EXTRACTION SUMMARY
+
+Objective
+
+Discuss how to extract radar/contact observations from Command: Modern
+Operations (CMO) for use in reinforcement learning (RL) agents.
+
+Key Conclusions
+
+1.  CMO does not primarily expose a REST-style JSON API.
+
+2.  The standard mechanism for accessing simulation state is the CMO Lua
+    API.
+
+3.  RL environments should transform CMO objects into fixed-size
+    numerical observations.
+
+4.  TacView Advanced is NOT required for RL observation extraction.
+
+5.  The preferred architecture is:
+
+    CMO -> Lua API -> Python bridge -> Gymnasium environment -> PPO /
+    SAC / Transformer policy
+
+Example Radar Contact
+
+Illustrative contact fields:
+
+-   Contact GUID
+-   Contact type
+-   Identification status
+-   Latitude / Longitude
+-   Altitude
+-   Speed
+-   Heading
+-   Detection source
+-   Track quality
+-   Classification confidence
+
+Example RL Observation Schema
+
+Observation Dictionary:
+
+obs = { “ownship”: […], “contacts”: […], “weapons”: […], “sensors”: […]
+}
+
+Ownship State
+
+[ latitude, longitude, heading_deg, speed_kt, fuel_fraction,
+damage_fraction]
+
+Contact Representation
+
+Per contact:
+
+[ range_nm, bearing_deg, altitude_ft, speed_kt, heading_deg,
+contact_age_sec, classification, hostility, radar_quality, esm_detected]
+
+Typical Encodings
+
+Classification: 0 = Unknown 1 = Aircraft 2 = Surface Ship 3 = Missile 4
+= Submarine 5 = Ground Unit
+
+Hostility: 0 = Unknown 1 = Friendly 2 = Neutral 3 = Suspect 4 = Hostile
+
+Fixed-Length Observation
+
+Example:
+
+-   Top 50 contacts retained.
+-   Each contact represented by 10 features.
+-   Contact tensor shape: (50, 10)
+
+This can be: - Flattened into a vector. - Processed using a
+Transformer/attention architecture.
+
+More Realistic Contact Representation
+
+Include:
+
+-   Range
+-   Bearing
+-   Altitude
+-   Speed
+-   Heading
+-   Radial velocity
+-   Contact age
+-   Classification probabilities
+-   Hostility probabilities
+-   Track quality
+-   Estimated RCS
+-   Emission status
+-   Jamming status
+-   Missile warning indicators
+
+Probabilistic representations are preferred over hard classifications.
+
+Extraction Architecture
+
+Recommended stack:
+
+CMO Scenario -> Lua API -> JSON / CSV export -> Python parser -> RL
+observation builder
+
+Simple prototype:
+
+CMO Lua -> JSON file -> Python reads JSON -> Observation tensor
+
+Environment Requirements
+
+Minimum:
+
+-   Command: Modern Operations
+-   Lua scripting access
+-   Python 3
+-   numpy
+-   pandas (optional)
+-   gymnasium or custom RL environment
+-   PyTorch (for learning)
+
+Observation Builder Responsibilities
+
+-   Convert contacts into numerical features.
+-   Normalise values.
+-   Pad/truncate to fixed contact count.
+-   Produce tensors suitable for neural networks.
+
+TacView Discussion
+
+TacView Advanced is NOT required.
+
+Reasons:
+
+-   Lua API already provides access to:
+    -   Contacts
+    -   Units
+    -   Weapons
+    -   Sensors
+    -   Missions
+    -   Fuel state
+    -   Damage state
+
+TacView is primarily useful for:
+
+-   Replay
+-   Visualisation
+-   Human demonstration collection
+-   Simulator-agnostic telemetry
+
+TacView may expose less information than the Lua API.
+
+Recommended Research Direction
+
+For RL research:
+
+CMO -> Lua observation extraction -> Python Gymnasium wrapper -> PPO /
+SAC / Transformer policy
+
+Avoid using TacView as the primary observation source unless
+cross-simulator telemetry compatibility is required.

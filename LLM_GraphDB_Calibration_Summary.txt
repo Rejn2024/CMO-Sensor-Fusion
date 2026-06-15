@@ -1,0 +1,294 @@
+
+LLM + Graph Database Probability Estimation and Calibration
+==========================================================
+
+Objective
+---------
+Use a Graph Database (knowledge graph) as the evidence source for an LLM, while producing probability estimates that correspond to real-world frequencies and can be trusted for decision support.
+
+Core Principle
+--------------
+Do NOT rely on the LLM's self-reported confidence as a probability.
+
+Preferred architecture:
+
+    User Query
+        ↓
+    Graph Retrieval
+        ↓
+    Candidate Hypotheses
+        ↓
+    Evidence Subgraphs
+        ↓
+    Feature Extraction
+        ↓
+    Calibrated Probabilistic Model
+        ↓
+    LLM Explanation Layer
+
+Rather than:
+
+    Graph DB
+        ↓
+    LLM
+        ↓
+    Probability
+
+The calibrated model should generate probabilities. The LLM should explain them.
+
+Graph Evidence
+--------------
+For each candidate hypothesis, retrieve:
+
+- Supporting edges
+- Contradicting edges
+- Source reliability
+- Recency
+- Path length
+- Centrality measures
+- Number of independent evidence paths
+
+Example:
+
+{
+  "candidate": "Target is hostile",
+  "supporting_edges": [...],
+  "contradicting_edges": [...],
+  "source_reliability": [...],
+  "recency": [...]
+}
+
+The LLM can then produce:
+
+{
+  "hypothesis": "...",
+  "raw_score": 0.73,
+  "supporting_facts": [...],
+  "uncertainties": [...],
+  "missing_information": [...]
+}
+
+Calibration
+-----------
+Definition:
+
+A calibrated system satisfies:
+
+    Among all events predicted with probability p,
+    approximately p actually occur.
+
+Accuracy and calibration are different.
+
+Example:
+- Predict 90% confidence repeatedly
+- Correct only 60% of the time
+
+=> accurate/confident perhaps, but poorly calibrated.
+
+Calibration Dataset
+-------------------
+Collect historical examples:
+
+    Graph State
+        ↓
+    Prediction
+        ↓
+    Actual Outcome
+
+Store:
+
+{
+  "graph_state": ...,
+  "prediction": 0.82,
+  "outcome": 1
+}
+
+Large numbers of examples are required.
+
+For Command Modern Operations (CMO), simulation provides ground truth labels, making dataset generation practical.
+
+Reliability Diagrams
+--------------------
+Compare:
+
+    Predicted Probability
+        vs
+    Observed Frequency
+
+A perfectly calibrated model lies on the diagonal.
+
+Calibration Techniques
+----------------------
+
+1. Temperature Scaling
+----------------------
+
+Adjust logits:
+
+    P = sigmoid(logit / T)
+
+T > 1 reduces overconfidence.
+
+Advantages:
+- Simple
+- Stable
+- Common
+
+Disadvantages:
+- Only fixes global confidence bias
+
+2. Platt Scaling
+----------------
+
+Fit:
+
+    P = sigmoid(a * score + b)
+
+Learn a and b from validation data.
+
+Advantages:
+- Simple
+- Often effective
+
+3. Isotonic Regression
+----------------------
+
+Learn:
+
+    raw_score -> calibrated_probability
+
+non-parametrically.
+
+Advantages:
+- Flexible
+
+Disadvantages:
+- Requires more data
+- Can overfit
+
+Graph-Centric Calibration
+-------------------------
+Instead of calibrating LLM confidence, calibrate graph-derived features.
+
+Example feature vector:
+
+    x = [
+        support_score,
+        contradiction_score,
+        source_quality,
+        recency,
+        graph_distance
+    ]
+
+Train:
+
+    P(outcome | x)
+
+using:
+
+- Logistic regression
+- Gradient boosted trees (e.g. XGBoost)
+- Random forests
+- Small neural networks
+
+The LLM becomes an explanation engine rather than the probability engine.
+
+Ensemble Calibration
+--------------------
+Generate multiple estimates:
+
+- Multiple LLMs
+- Same LLM with different prompts
+- Same LLM with different retrievals
+
+Example:
+
+0.81
+0.78
+0.80
+
+=> high agreement
+
+Versus:
+
+0.95
+0.55
+0.31
+
+=> high uncertainty
+
+Variance becomes a useful uncertainty estimate.
+
+Monte Carlo Retrieval
+---------------------
+Perturb graph retrieval:
+
+- Remove some edges
+- Alter retrieval depth
+- Use alternative ranking methods
+- Explore alternative paths
+
+Recompute probability repeatedly.
+
+Stable outputs imply robust evidence.
+
+Large variation implies high epistemic uncertainty.
+
+Defence / CMO Example
+---------------------
+Hypotheses:
+
+- Commercial aircraft
+- Military transport
+- Bomber
+
+Evidence:
+
+- Radar track
+- IFF
+- Emissions
+- Airfield origin
+- Course
+- Altitude
+- Speed
+
+Feature model outputs:
+
+{
+  "Bomber": 0.62,
+  "Military Transport": 0.27,
+  "Commercial Aircraft": 0.11
+}
+
+LLM explanation:
+
+"Bomber is most likely because the track originated from a military airfield,
+ exhibits military radar emissions, and matches typical bomber cruise altitude.
+ Confidence is moderated because no weapons-control radar emissions have yet
+ been observed."
+
+Recommended Architecture for Future CMO / RL Agent Work
+-------------------------------------------------------
+
+    Graph Database
+           ↓
+    Feature Extraction
+           ↓
+    Calibrated Probabilistic Model
+           ↓
+    LLM Explanation Layer
+
+Benefits:
+- Measurable probabilities
+- Validation against simulation outcomes
+- Improved trustworthiness
+- Suitable for planning agents
+- Suitable for reinforcement learning systems
+- Compatible with GraphRAG architectures
+- Supports uncertainty estimation and calibration
+
+Key Takeaway
+------------
+Use the graph database to retrieve evidence.
+Use a calibrated statistical model to estimate probabilities.
+Use the LLM to explain reasoning, identify uncertainties, and communicate results.
