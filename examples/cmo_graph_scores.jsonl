@@ -1,0 +1,4 @@
+{"scenario_id":"raid-001","contact_id":"C-101","observation_time":"2026-06-15T10:00:00Z","scores":{"commercial_aircraft":-0.2,"friendly_fighter":0.8,"hostile_fighter":2.8},"truth":"hostile_fighter","evidence_query_id":"q-101"}
+{"scenario_id":"raid-002","contact_id":"C-205","observation_time":"2026-06-15T10:05:00Z","scores":{"commercial_aircraft":2.4,"friendly_fighter":0.2,"hostile_fighter":-0.4},"truth":"commercial_aircraft","evidence_query_id":"q-205"}
+{"scenario_id":"raid-003","contact_id":"C-301","observation_time":"2026-06-15T10:10:00Z","scores":{"commercial_aircraft":-0.5,"friendly_fighter":2.7,"hostile_fighter":0.4},"truth":"friendly_fighter","evidence_query_id":"q-301"}
+{"scenario_id":"raid-004","contact_id":"C-404","observation_time":"2026-06-15T10:15:00Z","scores":{"commercial_aircraft":-0.5,"friendly_fighter":0.7,"hostile_fighter":2.6},"truth":"friendly_fighter","evidence_query_id":"q-404"}
