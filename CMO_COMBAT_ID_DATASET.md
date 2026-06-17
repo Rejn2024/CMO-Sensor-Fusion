@@ -19,38 +19,50 @@ time steps can produce many records.
 
 ### 2. Copy or reference the Lua script from CMO
 
-CMO executes Lua through its built-in Lua console or event/action system. The
-simplest manual workflow is to reference this repository script directly with
-`dofile`:
+CMO executes Lua through its built-in Lua console or event/action system. In
+CMO, the standard Lua `dofile` helper may not be available in the console; if
+you see `attempt to call a nil value (global 'dofile')`, use CMO's script
+runner instead and point it at the Lua **file**:
 
 ```lua
-dofile('C:/path/to/Conserve/cmo_scenario_export.lua')
+ScenEdit_RunScript('C:/path/to/Conserve/cmo_scenario_export.lua')
 ```
 
-Use forward slashes in Windows paths, or escape backslashes (`C:\\path\\file.lua`).
+Use forward slashes in Windows paths, or escape backslashes
+(`C:\\path\\file.lua`). Do not pass the export folder to the script runner;
+the script runner path must end in `cmo_scenario_export.lua`. The export folder
+is configured separately with `CMO_COMBAT_ID_EXPORT`, as shown below.
 
 ### 3. Export one scenario time step
 
-Open the scenario, pause it at the time step you want to sample, open the Lua
-console, set `CMO_COMBAT_ID_EXPORT`, and run the exporter:
+Open the scenario, pause it at the time step you want to begin sampling, open
+the Lua console, set `CMO_COMBAT_ID_EXPORT`, and run the exporter. The first run
+exports immediately and installs/updates a repeatable event that reruns the
+exporter every 60 seconds of scenario time:
 
 ```lua
 CMO_COMBAT_ID_EXPORT = 'C:/cmo_exports/scenario_001_t0000.jsonl'
-dofile('C:/path/to/Conserve/cmo_scenario_export.lua')
+CMO_COMBAT_ID_SCRIPT_PATH = 'C:/path/to/Conserve/cmo_scenario_export.lua'
+ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)
 ```
 
 The exporter appends to the file named by `CMO_COMBAT_ID_EXPORT`. If the file
 does not exist, CMO creates it. If it already exists, new records are added to
-the end, so delete the file first when you want a clean re-export.
+the end, so delete the file first when you want a clean re-export. Leave the
+scenario running or advance scenario time and the installed event will append
+new snapshots once per scenario minute. Set `CMO_COMBAT_ID_AUTO_EVENT = false`
+before running the script if you only want a one-off export.
 
 ### 4. Capture multiple time steps
 
-For temporal coverage, advance the scenario clock, change the output filename,
-and rerun the same two Lua lines:
+For separate temporal runs, change the output filename and rerun the setup. The
+recurring event will be updated to append subsequent one-minute snapshots to the
+new file:
 
 ```lua
 CMO_COMBAT_ID_EXPORT = 'C:/cmo_exports/scenario_001_t0010.jsonl'
-dofile('C:/path/to/Conserve/cmo_scenario_export.lua')
+CMO_COMBAT_ID_SCRIPT_PATH = 'C:/path/to/Conserve/cmo_scenario_export.lua'
+ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)
 ```
 
 Recommended naming is `scenario_<id>_t<minutes-or-seconds>.jsonl` so each file
@@ -66,12 +78,19 @@ For every side, the script attempts to export both:
   combat-ID observations because they represent what an observing side currently
   knows.
 - `unit` records from `ScenEdit_GetUnits(...)`, which are useful for ground
-  truth, debugging, and label QA.
+  truth, debugging, label QA, and platform-level sensor state.
 
 Each output line is one JSON object. Important fields include `record_kind`,
 `side`, `guid`, `name`, `type`, `subtype`, `class_name`, `dbid`, `latitude`,
 `longitude`, `altitude_m`, `speed_kts`, `heading_deg`, `course_deg`, `posture`,
-`actual_side`, `identification_status`, and `detected_by`.
+`actual_side`, `identification_status`, `detected_by`, `scenario_time`,
+`sensors`, `components`, `emissions`, `last_detections`, `doctrine`, `damage`,
+`loadout`, `mounts`, `magazines`, `weapons`, and `wrapper_snapshot`. The exporter
+also emits child records such as `unit_sensor`, `unit_component`,
+`contact_emission`, and `contact_last_detection` so individual sensor/emitter
+wrappers can be inspected directly. The nested sensor/component fields preserve
+CMO-provided radar, ECM, ESM, and other emitter state when it is exposed by the
+unit or contact wrapper.
 
 ### 6. Verify the export before conversion
 
