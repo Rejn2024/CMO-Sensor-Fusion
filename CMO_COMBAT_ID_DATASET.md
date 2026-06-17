@@ -22,16 +22,26 @@ time steps can produce many records.
 CMO executes Lua through its built-in Lua console or event/action system. In
 CMO, the standard Lua `dofile` helper may not be available in the console; if
 you see `attempt to call a nil value (global 'dofile')`, use CMO's script
-runner instead and point it at the Lua **file**:
+runner instead. `ScenEdit_RunScript` only loads scripts from CMO's installation
+`Lua` folder, or from a subfolder beneath it, so first copy
+`cmo_scenario_export.lua` into that folder. For example, copy it to a location
+like:
 
-```lua
-ScenEdit_RunScript('C:/path/to/Conserve/cmo_scenario_export.lua')
+```text
+<CMO install directory>/Lua/cmo_scenario_export.lua
 ```
 
-Use forward slashes in Windows paths, or escape backslashes
-(`C:\\path\\file.lua`). Do not pass the export folder to the script runner;
-the script runner path must end in `cmo_scenario_export.lua`. The export folder
-is configured separately with `CMO_COMBAT_ID_EXPORT`, as shown below.
+Then run it by relative Lua-folder path, not by absolute Windows path:
+
+```lua
+ScenEdit_RunScript('cmo_scenario_export.lua')
+```
+
+If you keep helper scripts in a subfolder under CMO's `Lua` folder, include only
+that relative subfolder path, for example
+`ScenEdit_RunScript('combat_id/cmo_scenario_export.lua')`. Do not pass the
+export folder to the script runner; the export folder is configured separately
+with `CMO_COMBAT_ID_EXPORT`, as shown below.
 
 ### 3. Export one scenario time step
 
@@ -42,16 +52,20 @@ exporter every 60 seconds of scenario time:
 
 ```lua
 CMO_COMBAT_ID_EXPORT = 'C:/cmo_exports/scenario_001_t0000.jsonl'
-CMO_COMBAT_ID_SCRIPT_PATH = 'C:/path/to/Conserve/cmo_scenario_export.lua'
+CMO_COMBAT_ID_SCRIPT_PATH = 'cmo_scenario_export.lua'
 ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)
 ```
 
-The exporter appends to the file named by `CMO_COMBAT_ID_EXPORT`. If the file
-does not exist, CMO creates it. If it already exists, new records are added to
-the end, so delete the file first when you want a clean re-export. Leave the
-scenario running or advance scenario time and the installed event will append
-new snapshots once per scenario minute. Set `CMO_COMBAT_ID_AUTO_EVENT = false`
-before running the script if you only want a one-off export.
+When CMO exposes Lua file I/O, the exporter appends to the file named by
+`CMO_COMBAT_ID_EXPORT`. If the file does not exist, CMO creates it. If it
+already exists, new records are added to the end, so delete the file first when
+you want a clean re-export. Some CMO Lua environments disable the standard Lua
+`io` library; if you see `attempt to index a nil value (global 'io')`, the
+exporter now falls back to CMO scenario key-values instead of crashing. Leave
+the scenario running or advance scenario time and the installed event will
+append new snapshots once per scenario minute. Set
+`CMO_COMBAT_ID_AUTO_EVENT = false` before running the script if you only want a
+one-off export.
 
 ### 4. Capture multiple time steps
 
@@ -61,7 +75,7 @@ new file:
 
 ```lua
 CMO_COMBAT_ID_EXPORT = 'C:/cmo_exports/scenario_001_t0010.jsonl'
-CMO_COMBAT_ID_SCRIPT_PATH = 'C:/path/to/Conserve/cmo_scenario_export.lua'
+CMO_COMBAT_ID_SCRIPT_PATH = 'cmo_scenario_export.lua'
 ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)
 ```
 
@@ -92,7 +106,25 @@ wrappers can be inspected directly. The nested sensor/component fields preserve
 CMO-provided radar, ECM, ESM, and other emitter state when it is exposed by the
 unit or contact wrapper.
 
-### 6. Verify the export before conversion
+
+### 6. Retrieve key-value fallback output when Lua `io` is unavailable
+
+If the CMO console reports that JSONL records were stored in scenario key-values,
+copy them from the console with:
+
+```lua
+local count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_EXPORT_count') or '0') or 0
+for i = 1, count do
+  print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_EXPORT_' .. tostring(i)))
+end
+```
+
+Paste the printed JSONL lines into a `.jsonl` file before running the Python
+converter. Override the key prefix by setting `CMO_COMBAT_ID_KEY_PREFIX` before
+running the exporter if you need multiple independent captures in the same
+scenario.
+
+### 7. Verify the export before conversion
 
 After running the Lua script, confirm that the CMO Lua console prints a message
 like:
@@ -106,7 +138,7 @@ per line. Empty files usually mean the scenario has no sides/contacts visible at
 that time step, the output folder is not writable, or the Lua console ran from a
 different scenario state than expected.
 
-### 7. Optional: automate snapshot collection in CMO
+### 8. Optional: automate snapshot collection in CMO
 
 For larger data-generation runs, attach the same Lua command to a CMO event or
 run it at regular manual pause points. Use a unique output path for each time

@@ -3,25 +3,39 @@
 --
 -- Usage from CMO:
 --   1. Open the scenario at the time step you want to sample.
---   2. Open the Lua console and run: ScenEdit_RunScript('C:/path/to/cmo_scenario_export.lua')
+--   2. Copy this file into CMO's Lua folder, then run from the Lua console:
+--        ScenEdit_RunScript('cmo_scenario_export.lua')
 --   3. Optionally set CMO_COMBAT_ID_EXPORT before running this file:
 --        CMO_COMBAT_ID_EXPORT = 'C:/path/to/export.jsonl'
 --   4. The script exports immediately and installs/updates a repeatable CMO
---      event that reruns it every 60 seconds of scenario time. If this file is
---      not in CMO's Lua folder, set CMO_COMBAT_ID_SCRIPT_PATH to its full path
---      before step 2 so the recurring event can find it.
+--      event that reruns it every 60 seconds of scenario time.
+--
+-- Important: ScenEdit_RunScript only loads files from CMO's Lua folder (or a
+-- subfolder beneath it). CMO_COMBAT_ID_SCRIPT_PATH should therefore be a path
+-- relative to that Lua folder, not an absolute Windows path.
 --
 -- The script writes one JSON object per detected/contact-or-unit track. The companion
 -- Python script extract_cmo_combat_id_dataset.py converts those JSONL snapshots into
 -- train/validation/test splits for the combat ID training pathway.
 
 local output_path = CMO_COMBAT_ID_EXPORT or 'cmo_combat_id_export.jsonl'
+local keyvalue_prefix = CMO_COMBAT_ID_KEY_PREFIX or 'CMO_COMBAT_ID_EXPORT'
 local script_path = CMO_COMBAT_ID_SCRIPT_PATH or 'cmo_scenario_export.lua'
 local auto_event_enabled = CMO_COMBAT_ID_AUTO_EVENT ~= false
 local auto_event_name = CMO_COMBAT_ID_EVENT_NAME or 'CMO combat-ID export every minute'
 local auto_trigger_name = CMO_COMBAT_ID_TRIGGER_NAME or 'CMO combat-ID export 60s trigger'
 local auto_action_name = CMO_COMBAT_ID_ACTION_NAME or 'CMO combat-ID export action'
 local auto_interval_seconds = CMO_COMBAT_ID_INTERVAL_SECONDS or 60
+
+local function is_absolute_windows_path(path)
+  return type(path) == 'string' and (path:match('^%a:[/\\]') ~= nil or path:match('^[/\\][/\\]') ~= nil)
+end
+
+local function warn_if_runscript_path_is_absolute()
+  if is_absolute_windows_path(script_path) then
+    print('WARNING: CMO_COMBAT_ID_SCRIPT_PATH should be relative to CMO Lua folder for ScenEdit_RunScript: ' .. script_path)
+  end
+end
 
 local function json_escape(value)
   if value == nil then return '' end
@@ -103,6 +117,38 @@ local function current_time()
   local ok, now = pcall(function() return ScenEdit_CurrentTime() end)
   if ok then return now end
   return nil
+end
+
+local function lua_file_io_available()
+  return type(io) == 'table' and type(io.open) == 'function'
+end
+
+local function open_export_writer(path)
+  if lua_file_io_available() then
+    local file_handle, err = io.open(path, 'a')
+    if file_handle == nil then
+      error('Unable to open CMO export path: ' .. tostring(err))
+    end
+    return {
+      mode = 'file',
+      write = function(_, line) file_handle:write(line) end,
+      close = function() file_handle:close() end,
+    }
+  end
+
+  local count_key = keyvalue_prefix .. '_count'
+  local existing_count = tonumber(ScenEdit_GetKeyValue(count_key) or '0') or 0
+  local next_index = existing_count
+  print('WARNING: Lua io library is unavailable in this CMO environment; writing JSONL records to scenario key-values with prefix ' .. keyvalue_prefix)
+  return {
+    mode = 'keyvalue',
+    write = function(_, line)
+      next_index = next_index + 1
+      ScenEdit_SetKeyValue(keyvalue_prefix .. '_' .. tostring(next_index), line)
+      ScenEdit_SetKeyValue(count_key, tostring(next_index))
+    end,
+    close = function() end,
+  }
 end
 
 local function emit_record_with_extra(handle, kind, side_name, object, extra)
@@ -208,6 +254,7 @@ end
 local function install_minute_export_event()
   if not auto_event_enabled then return end
   local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
+    "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
     "CMO_COMBAT_ID_SCRIPT_PATH = '" .. script_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
     "ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)"
 
@@ -221,12 +268,10 @@ local function install_minute_export_event()
   pcall(function() ScenEdit_SetEventAction(auto_event_name, {mode='add', name=auto_action_name}) end)
 end
 
+warn_if_runscript_path_is_absolute()
 install_minute_export_event()
 
-local handle, err = io.open(output_path, 'a')
-if handle == nil then
-  error('Unable to open CMO export path: ' .. tostring(err))
-end
+local handle = open_export_writer(output_path)
 
 local ok_sides, sides = pcall(function() return VP_GetSides() end)
 if ok_sides and sides ~= nil then
@@ -238,4 +283,8 @@ else
 end
 
 handle:close()
-print('CMO combat-ID export appended to ' .. output_path .. '; recurring export event interval=' .. tostring(auto_interval_seconds) .. 's')
+if handle.mode == 'file' then
+  print('CMO combat-ID export appended to ' .. output_path .. '; recurring export event interval=' .. tostring(auto_interval_seconds) .. 's')
+else
+  print('CMO combat-ID export stored in scenario key-values with prefix ' .. keyvalue_prefix .. '; recurring export event interval=' .. tostring(auto_interval_seconds) .. 's')
+end
