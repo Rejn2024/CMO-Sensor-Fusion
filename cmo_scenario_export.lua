@@ -274,12 +274,44 @@ local function cmo_object_exists(list_function, object_name)
   return ok and cmo_list_contains(list_value, object_name)
 end
 
-local function cmo_upsert_trigger(trigger_name, interval_text)
+local function cmo_regular_time_interval_candidates(interval_seconds)
+  local seconds = math.floor(tonumber(interval_seconds) or 60)
+  if seconds < 1 then seconds = 1 end
+
+  local minutes = math.floor(seconds / 60)
+  local remaining_seconds = seconds - (minutes * 60)
+  local hours = math.floor(minutes / 60)
+  minutes = minutes - (hours * 60)
+
+  return {
+    tostring(seconds) .. ' sec',
+    tostring(seconds) .. 'sec',
+    string.format('%02d:%02d:%02d', hours, minutes, remaining_seconds),
+    tostring(seconds),
+  }
+end
+
+local function cmo_upsert_trigger(trigger_name, interval_seconds)
   local mode = 'add'
   if cmo_object_exists(function() return ScenEdit_SetTrigger({mode='list'}) end, trigger_name) then
     mode = 'update'
   end
-  return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, interval=interval_text})
+
+  local errors = {}
+  for _, interval_text in ipairs(cmo_regular_time_interval_candidates(interval_seconds)) do
+    local ok, trigger = pcall(function()
+      return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, interval=interval_text})
+    end)
+    if ok and trigger ~= nil then
+      print('CMO combat-ID export recurring trigger interval set to ' .. interval_text)
+      return trigger, interval_text
+    end
+    local error_text = ok and tostring(_errmsg_ or 'unknown error') or tostring(trigger)
+    table.insert(errors, interval_text .. ' => ' .. error_text)
+  end
+
+  print('WARNING: Unable to install/update CMO combat-ID recurring trigger; tried intervals: ' .. table.concat(errors, '; '))
+  return nil, nil
 end
 
 local function cmo_upsert_action(action_name, action_script)
@@ -313,15 +345,8 @@ local function cmo_add_event_links_if_missing(event_name, trigger_name, action_n
   end
 end
 
-local function cmo_regular_time_interval_text(interval_seconds)
-  local seconds = math.floor(tonumber(interval_seconds) or 60)
-  if seconds < 1 then seconds = 1 end
-  return tostring(seconds) .. 'sec'
-end
-
 local function install_minute_export_event()
   if not auto_event_enabled then return end
-  local interval_text = cmo_regular_time_interval_text(auto_interval_seconds)
   local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "CMO_COMBAT_ID_INTERVAL_SECONDS = " .. tostring(auto_interval_seconds) .. "\r\n" ..
@@ -329,7 +354,8 @@ local function install_minute_export_event()
     "CMO_COMBAT_ID_SCRIPT_PATH = '" .. script_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)"
 
-  cmo_upsert_trigger(auto_trigger_name, interval_text)
+  local trigger = cmo_upsert_trigger(auto_trigger_name, auto_interval_seconds)
+  if trigger == nil then return end
   cmo_upsert_action(auto_action_name, action_script)
   cmo_upsert_event(auto_event_name)
   cmo_add_event_links_if_missing(auto_event_name, auto_trigger_name, auto_action_name)
