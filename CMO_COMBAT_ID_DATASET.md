@@ -56,6 +56,8 @@ CMO_COMBAT_ID_SCRIPT_PATH = 'cmo_scenario_export.lua'
 ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)
 ```
 
+By default, every generated JSONL record is also printed to the Lua console as it is written. Set `CMO_COMBAT_ID_PRINT_JSONL = false` before running the script if you want file/key-value output without console mirroring.
+
 When CMO exposes Lua file I/O, the exporter appends to the file named by
 `CMO_COMBAT_ID_EXPORT`. If the file does not exist, CMO creates it. If it
 already exists, new records are added to the end, so delete the file first when
@@ -124,7 +126,25 @@ converter. Override the key prefix by setting `CMO_COMBAT_ID_KEY_PREFIX` before
 running the exporter if you need multiple independent captures in the same
 scenario.
 
-### 7. Verify the export before conversion
+
+### 7. Recover console-mirrored JSONL from a CMO Logs text file
+
+If your CMO installation mirrors Lua console `print(...)` output into a `.txt`
+file under its `Logs` directory, recover the console-mirrored JSONL records with:
+
+```bash
+python extract_cmo_jsonl_from_log.py \
+  --input "C:/path/to/CMO/Logs/LuaHistory.txt" \
+  --output C:/cmo_exports/recovered_from_log.jsonl \
+  --unique
+```
+
+The scraper tolerates timestamps or other text before/after each JSON object and
+only writes records that match this exporter's `cmo_combat_id_v1` schema or
+`cmo_lua` source marker. Use the recovered `.jsonl` file as input to the normal
+Python converter.
+
+### 8. Verify the export before conversion
 
 After running the Lua script, confirm that the CMO Lua console prints a message
 like:
@@ -138,7 +158,7 @@ per line. Empty files usually mean the scenario has no sides/contacts visible at
 that time step, the output folder is not writable, or the Lua console ran from a
 different scenario state than expected.
 
-### 8. Optional: automate snapshot collection in CMO
+### 9. Optional: automate snapshot collection in CMO
 
 For larger data-generation runs, attach the same Lua command to a CMO event or
 run it at regular manual pause points. Use a unique output path for each time

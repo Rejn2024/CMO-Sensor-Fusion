@@ -26,6 +26,7 @@ local auto_event_name = CMO_COMBAT_ID_EVENT_NAME or 'CMO combat-ID export every 
 local auto_trigger_name = CMO_COMBAT_ID_TRIGGER_NAME or 'CMO combat-ID export 60s trigger'
 local auto_action_name = CMO_COMBAT_ID_ACTION_NAME or 'CMO combat-ID export action'
 local auto_interval_seconds = CMO_COMBAT_ID_INTERVAL_SECONDS or 60
+local print_jsonl_to_console = CMO_COMBAT_ID_PRINT_JSONL ~= false
 
 local function is_absolute_windows_path(path)
   return type(path) == 'string' and (path:match('^%a:[/\\]') ~= nil or path:match('^[/\\][/\\]') ~= nil)
@@ -131,7 +132,10 @@ local function open_export_writer(path)
     end
     return {
       mode = 'file',
-      write = function(_, line) file_handle:write(line) end,
+      write = function(_, line)
+        file_handle:write(line)
+        if print_jsonl_to_console then print(line) end
+      end,
       close = function() file_handle:close() end,
     }
   end
@@ -146,6 +150,7 @@ local function open_export_writer(path)
       next_index = next_index + 1
       ScenEdit_SetKeyValue(keyvalue_prefix .. '_' .. tostring(next_index), line)
       ScenEdit_SetKeyValue(count_key, tostring(next_index))
+      if print_jsonl_to_console then print(line) end
     end,
     close = function() end,
   }
@@ -255,6 +260,7 @@ local function install_minute_export_event()
   if not auto_event_enabled then return end
   local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
     "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
+    "CMO_COMBAT_ID_PRINT_JSONL = " .. tostring(print_jsonl_to_console) .. "\n" ..
     "CMO_COMBAT_ID_SCRIPT_PATH = '" .. script_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
     "ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)"
 
