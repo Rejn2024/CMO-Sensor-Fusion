@@ -49,9 +49,10 @@ Open the scenario, pause it at the time step you want to begin sampling, open
 the Lua console, set `CMO_COMBAT_ID_EXPORT`, and run the exporter. The first run
 exports immediately and installs/updates a repeatable event that reruns the
 exporter every 60 seconds of scenario time. The exporter creates the CMO
-`RegularTime` trigger with an interval string such as `60 sec`, which matches
-CMO's event-editor parser, and updates existing exporter triggers/actions
-instead of trying to add duplicates:
+`RegularTime` trigger with the documented interval string format first (for
+example `60 sec`) and, if the active CMO build rejects that format, retries
+other common parser formats such as `60sec`, `00:01:00`, and `60`. It updates
+existing exporter triggers/actions instead of trying to add duplicates:
 
 ```lua
 CMO_COMBAT_ID_EXPORT = 'C:/cmo_exports/scenario_001_t0000.jsonl'
