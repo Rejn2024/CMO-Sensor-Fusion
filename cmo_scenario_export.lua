@@ -25,7 +25,7 @@ local auto_event_enabled = CMO_COMBAT_ID_AUTO_EVENT ~= false
 local auto_event_name = CMO_COMBAT_ID_EVENT_NAME or 'CMO combat-ID export every minute'
 local auto_trigger_name = CMO_COMBAT_ID_TRIGGER_NAME or 'CMO combat-ID export 60s trigger'
 local auto_action_name = CMO_COMBAT_ID_ACTION_NAME or 'CMO combat-ID export action'
-local auto_interval_seconds = CMO_COMBAT_ID_INTERVAL_SECONDS or 60
+local auto_interval_seconds = tonumber(CMO_COMBAT_ID_INTERVAL_SECONDS or 60) or 60
 local print_jsonl_to_console = CMO_COMBAT_ID_PRINT_JSONL ~= false
 
 local function is_absolute_windows_path(path)
@@ -256,22 +256,83 @@ local function export_side(handle, side)
   end
 end
 
+local function cmo_list_contains(list_value, expected_name)
+  if type(list_value) ~= 'table' then return false end
+  for _, item in pairs(list_value) do
+    if type(item) == 'table' then
+      local item_name = field(item, 'name', 'Name', 'description', 'Description')
+      if item_name == expected_name then return true end
+    elseif item == expected_name then
+      return true
+    end
+  end
+  return false
+end
+
+local function cmo_object_exists(list_function, object_name)
+  local ok, list_value = pcall(list_function)
+  return ok and cmo_list_contains(list_value, object_name)
+end
+
+local function cmo_upsert_trigger(trigger_name, interval_text)
+  local mode = 'add'
+  if cmo_object_exists(function() return ScenEdit_SetTrigger({mode='list'}) end, trigger_name) then
+    mode = 'update'
+  end
+  return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, Interval=interval_text})
+end
+
+local function cmo_upsert_action(action_name, action_script)
+  local mode = 'add'
+  if cmo_object_exists(function() return ScenEdit_SetAction({mode='list'}) end, action_name) then
+    mode = 'update'
+  end
+  return ScenEdit_SetAction({mode=mode, type='LuaScript', name=action_name, ScriptText=action_script})
+end
+
+local function cmo_upsert_event(event_name)
+  local mode = 'add'
+  local ok, existing_event = pcall(function() return ScenEdit_GetEvent(event_name, 4) end)
+  if ok and existing_event ~= nil then mode = 'update' end
+  return ScenEdit_SetEvent(event_name, {mode=mode, isActive=true, isRepeatable=true})
+end
+
+local function cmo_event_link_contains(event_value, level_name, expected_name)
+  if type(event_value) ~= 'table' then return false end
+  return cmo_list_contains(event_value[level_name] or event_value[level_name:sub(1, 1):upper() .. level_name:sub(2)], expected_name)
+end
+
+local function cmo_add_event_links_if_missing(event_name, trigger_name, action_name)
+  local ok, event_details = pcall(function() return ScenEdit_GetEvent(event_name, 0) end)
+  if not ok then event_details = nil end
+  if not cmo_event_link_contains(event_details, 'triggers', trigger_name) then
+    ScenEdit_SetEventTrigger(event_name, {mode='add', name=trigger_name})
+  end
+  if not cmo_event_link_contains(event_details, 'actions', action_name) then
+    ScenEdit_SetEventAction(event_name, {mode='add', name=action_name})
+  end
+end
+
+local function cmo_regular_time_interval_text(interval_seconds)
+  local seconds = math.floor(tonumber(interval_seconds) or 60)
+  if seconds < 1 then seconds = 1 end
+  return tostring(seconds) .. 'sec'
+end
+
 local function install_minute_export_event()
   if not auto_event_enabled then return end
-  local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
-    "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
-    "CMO_COMBAT_ID_PRINT_JSONL = " .. tostring(print_jsonl_to_console) .. "\n" ..
-    "CMO_COMBAT_ID_SCRIPT_PATH = '" .. script_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\n" ..
+  local interval_text = cmo_regular_time_interval_text(auto_interval_seconds)
+  local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
+    "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
+    "CMO_COMBAT_ID_INTERVAL_SECONDS = " .. tostring(auto_interval_seconds) .. "\r\n" ..
+    "CMO_COMBAT_ID_PRINT_JSONL = " .. tostring(print_jsonl_to_console) .. "\r\n" ..
+    "CMO_COMBAT_ID_SCRIPT_PATH = '" .. script_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "ScenEdit_RunScript(CMO_COMBAT_ID_SCRIPT_PATH)"
 
-  pcall(function() ScenEdit_SetTrigger({mode='add', type='RegularTime', name=auto_trigger_name, interval=auto_interval_seconds}) end)
-  pcall(function() ScenEdit_SetTrigger({mode='update', type='RegularTime', name=auto_trigger_name, interval=auto_interval_seconds}) end)
-  pcall(function() ScenEdit_SetAction({mode='add', type='LuaScript', name=auto_action_name, ScriptText=action_script}) end)
-  pcall(function() ScenEdit_SetAction({mode='update', type='LuaScript', name=auto_action_name, ScriptText=action_script}) end)
-  pcall(function() ScenEdit_SetEvent(auto_event_name, {mode='add', isActive=true, isRepeatable=true}) end)
-  pcall(function() ScenEdit_SetEvent(auto_event_name, {mode='update', isActive=true, isRepeatable=true}) end)
-  pcall(function() ScenEdit_SetEventTrigger(auto_event_name, {mode='add', name=auto_trigger_name}) end)
-  pcall(function() ScenEdit_SetEventAction(auto_event_name, {mode='add', name=auto_action_name}) end)
+  cmo_upsert_trigger(auto_trigger_name, interval_text)
+  cmo_upsert_action(auto_action_name, action_script)
+  cmo_upsert_event(auto_event_name)
+  cmo_add_event_links_if_missing(auto_event_name, auto_trigger_name, auto_action_name)
 end
 
 warn_if_runscript_path_is_absolute()
