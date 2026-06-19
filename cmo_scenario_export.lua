@@ -279,7 +279,7 @@ local function cmo_upsert_trigger(trigger_name, interval_text)
   if cmo_object_exists(function() return ScenEdit_SetTrigger({mode='list'}) end, trigger_name) then
     mode = 'update'
   end
-  return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, Interval=interval_text})
+  return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, interval=interval_text})
 end
 
 local function cmo_upsert_action(action_name, action_script)
