@@ -313,9 +313,15 @@ local function cmo_add_event_links_if_missing(event_name, trigger_name, action_n
   end
 end
 
+local function cmo_regular_time_interval_text(interval_seconds)
+  local seconds = math.floor(tonumber(interval_seconds) or 60)
+  if seconds < 1 then seconds = 1 end
+  return tostring(seconds) .. 'sec'
+end
+
 local function install_minute_export_event()
   if not auto_event_enabled then return end
-  local interval_text = tostring(auto_interval_seconds) .. ' sec'
+  local interval_text = cmo_regular_time_interval_text(auto_interval_seconds)
   local action_script = "CMO_COMBAT_ID_EXPORT = '" .. output_path:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "CMO_COMBAT_ID_KEY_PREFIX = '" .. keyvalue_prefix:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'\r\n" ..
     "CMO_COMBAT_ID_INTERVAL_SECONDS = " .. tostring(auto_interval_seconds) .. "\r\n" ..
