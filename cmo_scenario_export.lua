@@ -284,10 +284,14 @@ local function cmo_regular_time_interval_candidates(interval_seconds)
   minutes = minutes - (hours * 60)
 
   return {
-    tostring(seconds) .. ' sec',
-    tostring(seconds) .. 'sec',
-    string.format('%02d:%02d:%02d', hours, minutes, remaining_seconds),
-    tostring(seconds),
+    {display=tostring(seconds) .. ' (number)', value=seconds},
+    {display=tostring(seconds) .. ' sec', value=tostring(seconds) .. ' sec'},
+    {display=tostring(seconds) .. 'sec', value=tostring(seconds) .. 'sec'},
+    {display=tostring(seconds) .. ' second', value=tostring(seconds) .. ' second'},
+    {display=tostring(seconds) .. ' seconds', value=tostring(seconds) .. ' seconds'},
+    {display=string.format('%02d:%02d:%02d', hours, minutes, remaining_seconds), value=string.format('%02d:%02d:%02d', hours, minutes, remaining_seconds)},
+    {display=string.format('0.%02d:%02d:%02d', hours, minutes, remaining_seconds), value=string.format('0.%02d:%02d:%02d', hours, minutes, remaining_seconds)},
+    {display=tostring(seconds), value=tostring(seconds)},
   }
 end
 
@@ -298,16 +302,22 @@ local function cmo_upsert_trigger(trigger_name, interval_seconds)
   end
 
   local errors = {}
-  for _, interval_text in ipairs(cmo_regular_time_interval_candidates(interval_seconds)) do
+  for _, interval_candidate in ipairs(cmo_regular_time_interval_candidates(interval_seconds)) do
     local ok, trigger = pcall(function()
-      return ScenEdit_SetTrigger({mode=mode, type='RegularTime', name=trigger_name, interval=interval_text})
+      return ScenEdit_SetTrigger({
+        mode=mode,
+        type='RegularTime',
+        name=trigger_name,
+        description=trigger_name,
+        interval=interval_candidate.value,
+      })
     end)
     if ok and trigger ~= nil then
-      print('CMO combat-ID export recurring trigger interval set to ' .. interval_text)
-      return trigger, interval_text
+      print('CMO combat-ID export recurring trigger interval set to ' .. interval_candidate.display)
+      return trigger, interval_candidate.display
     end
     local error_text = ok and tostring(_errmsg_ or 'unknown error') or tostring(trigger)
-    table.insert(errors, interval_text .. ' => ' .. error_text)
+    table.insert(errors, interval_candidate.display .. ' => ' .. error_text)
   end
 
   print('WARNING: Unable to install/update CMO combat-ID recurring trigger; tried intervals: ' .. table.concat(errors, '; '))
@@ -319,7 +329,7 @@ local function cmo_upsert_action(action_name, action_script)
   if cmo_object_exists(function() return ScenEdit_SetAction({mode='list'}) end, action_name) then
     mode = 'update'
   end
-  return ScenEdit_SetAction({mode=mode, type='LuaScript', name=action_name, ScriptText=action_script})
+  return ScenEdit_SetAction({mode=mode, type='LuaScript', name=action_name, description=action_name, ScriptText=action_script})
 end
 
 local function cmo_upsert_event(event_name)
@@ -338,10 +348,10 @@ local function cmo_add_event_links_if_missing(event_name, trigger_name, action_n
   local ok, event_details = pcall(function() return ScenEdit_GetEvent(event_name, 0) end)
   if not ok then event_details = nil end
   if not cmo_event_link_contains(event_details, 'triggers', trigger_name) then
-    ScenEdit_SetEventTrigger(event_name, {mode='add', name=trigger_name})
+    ScenEdit_SetEventTrigger(event_name, {mode='add', name=trigger_name, description=trigger_name})
   end
   if not cmo_event_link_contains(event_details, 'actions', action_name) then
-    ScenEdit_SetEventAction(event_name, {mode='add', name=action_name})
+    ScenEdit_SetEventAction(event_name, {mode='add', name=action_name, description=action_name})
   end
 end
 
