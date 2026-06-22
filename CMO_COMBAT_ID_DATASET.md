@@ -131,7 +131,37 @@ running the exporter if you need multiple independent captures in the same
 scenario.
 
 
-### 7. Recover console-mirrored JSONL from a CMO Logs text file
+
+### 7. Triggered-event snapshots without Lua `io`
+
+Use `cmo_triggered_snapshot.lua` when the CMO action runs in an environment where
+the standard Lua `io` library is unavailable or when the event action should
+assign the captured scenario information for later CMO-side logic instead of
+writing a file. The script captures the same unit/contact fields as
+`cmo_scenario_export.lua`, assigns them to `CMO_COMBAT_ID_TRIGGER_RECORDS` and
+`CMO_COMBAT_ID_TRIGGER_SNAPSHOT`, and persists each JSON record with
+`ScenEdit_SetKeyValue`.
+
+Example event action body:
+
+```lua
+CMO_COMBAT_ID_TRIGGER_KEY_PREFIX = 'CMO_COMBAT_ID_TRIGGER'
+CMO_COMBAT_ID_TRIGGER_PRINT_JSONL = true
+ScenEdit_RunScript('cmo_triggered_snapshot.lua')
+```
+
+After the event fires, retrieve records from the scenario key-values without
+using file I/O:
+
+```lua
+local snapshot_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_snapshot_count') or '0') or 0
+local record_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_record_count') or '0') or 0
+for i = 1, record_count do
+  print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_' .. tostring(i)))
+end
+```
+
+### 8. Recover console-mirrored JSONL from a CMO Logs text file
 
 If your CMO installation mirrors Lua console `print(...)` output into a `.txt`
 file under its `Logs` directory, recover the console-mirrored JSONL records with:
@@ -148,7 +178,7 @@ only writes records that match this exporter's `cmo_combat_id_v1` schema or
 `cmo_lua` source marker. Use the recovered `.jsonl` file as input to the normal
 Python converter.
 
-### 8. Verify the export before conversion
+### 9. Verify the export before conversion
 
 After running the Lua script, confirm that the CMO Lua console prints a message
 like:
@@ -162,7 +192,7 @@ per line. Empty files usually mean the scenario has no sides/contacts visible at
 that time step, the output folder is not writable, or the Lua console ran from a
 different scenario state than expected.
 
-### 9. Optional: automate snapshot collection in CMO
+### 10. Optional: automate snapshot collection in CMO
 
 For larger data-generation runs, attach the same Lua command to a CMO event or
 run it at regular manual pause points. Use a unique output path for each time
