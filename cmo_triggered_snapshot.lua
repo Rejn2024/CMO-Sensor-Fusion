@@ -13,6 +13,7 @@
 --   <prefix>_snapshot_count                 -- total snapshots captured
 --   <prefix>_<snapshot>_record_count        -- records in this snapshot
 --   <prefix>_<snapshot>_<record>            -- JSON record for retrieval/logging
+--   CMO_COMBAT_ID_TRIGGER_KEYVALUES          -- in-memory fallback key/value table
 --
 -- Optional settings before running the event action:
 --   CMO_COMBAT_ID_TRIGGER_KEY_PREFIX = 'CMO_COMBAT_ID_TRIGGER'
@@ -22,6 +23,7 @@ local keyvalue_prefix = CMO_COMBAT_ID_TRIGGER_KEY_PREFIX or 'CMO_COMBAT_ID_TRIGG
 local print_jsonl_to_console = CMO_COMBAT_ID_TRIGGER_PRINT_JSONL ~= false
 local debug_enabled = CMO_COMBAT_ID_TRIGGER_DEBUG ~= false
 local debug_messages = {}
+CMO_COMBAT_ID_TRIGGER_KEYVALUES = CMO_COMBAT_ID_TRIGGER_KEYVALUES or {}
 
 local function debug(message)
   if not debug_enabled then return end
@@ -111,9 +113,21 @@ local function table_count(value)
   return count
 end
 
+local function api_is_present(api)
+  local api_type = type(api)
+  return api_type == 'function' or api_type == 'userdata'
+end
+
+local function api_type(name)
+  return tostring(type(_G[name]))
+end
+
 local function safe_get_key_value(key)
-  if type(ScenEdit_GetKeyValue) ~= 'function' then
-    debug('ScenEdit_GetKeyValue is unavailable while reading ' .. tostring(key))
+  if CMO_COMBAT_ID_TRIGGER_KEYVALUES[key] ~= nil then
+    return CMO_COMBAT_ID_TRIGGER_KEYVALUES[key]
+  end
+  if not api_is_present(ScenEdit_GetKeyValue) then
+    debug('ScenEdit_GetKeyValue is unavailable while reading ' .. tostring(key) .. '; using in-memory fallback')
     return nil
   end
   local ok, value = pcall(function() return ScenEdit_GetKeyValue(key) end)
@@ -125,8 +139,9 @@ local function safe_get_key_value(key)
 end
 
 local function safe_set_key_value(key, value)
-  if type(ScenEdit_SetKeyValue) ~= 'function' then
-    debug('ScenEdit_SetKeyValue is unavailable while writing ' .. tostring(key))
+  CMO_COMBAT_ID_TRIGGER_KEYVALUES[key] = value
+  if not api_is_present(ScenEdit_SetKeyValue) then
+    debug('ScenEdit_SetKeyValue is unavailable while writing ' .. tostring(key) .. '; stored in CMO_COMBAT_ID_TRIGGER_KEYVALUES only')
     return false
   end
   local ok, err = pcall(function() return ScenEdit_SetKeyValue(key, value) end)
@@ -218,7 +233,7 @@ local function append_side_records(records, side)
   local before_count = #records
   debug('Inspecting side "' .. tostring(side_name) .. '"')
 
-  if type(ScenEdit_GetUnits) ~= 'function' then
+  if not api_is_present(ScenEdit_GetUnits) then
     debug('ScenEdit_GetUnits is unavailable for side "' .. tostring(side_name) .. '"')
   else
     local ok_units, units = pcall(function() return ScenEdit_GetUnits({side=side_name}) end)
@@ -232,7 +247,7 @@ local function append_side_records(records, side)
     end
   end
 
-  if type(ScenEdit_GetContacts) ~= 'function' then
+  if not api_is_present(ScenEdit_GetContacts) then
     debug('ScenEdit_GetContacts is unavailable for side "' .. tostring(side_name) .. '"')
   else
     local ok_contacts, contacts = pcall(function() return ScenEdit_GetContacts(side_name) end)
@@ -252,11 +267,11 @@ end
 local function run_snapshot()
   debug('Triggered snapshot script started')
   debug('Configuration prefix=' .. tostring(keyvalue_prefix) .. ', print_jsonl=' .. tostring(print_jsonl_to_console))
-  debug('API availability VP_GetSides=' .. tostring(type(VP_GetSides)) .. ', ScenEdit_GetUnits=' .. tostring(type(ScenEdit_GetUnits)) .. ', ScenEdit_GetContacts=' .. tostring(type(ScenEdit_GetContacts)) .. ', ScenEdit_SetKeyValue=' .. tostring(type(ScenEdit_SetKeyValue)))
+  debug('API availability VP_GetSides=' .. api_type('VP_GetSides') .. ', ScenEdit_GetUnits=' .. api_type('ScenEdit_GetUnits') .. ', ScenEdit_GetContacts=' .. api_type('ScenEdit_GetContacts') .. ', ScenEdit_GetKeyValue=' .. api_type('ScenEdit_GetKeyValue') .. ', ScenEdit_SetKeyValue=' .. api_type('ScenEdit_SetKeyValue'))
 
   local records = {}
   local fatal_error = nil
-  if type(VP_GetSides) ~= 'function' then
+  if not api_is_present(VP_GetSides) then
     fatal_error = 'VP_GetSides is unavailable'
     debug(fatal_error)
   else

@@ -140,7 +140,11 @@ assign the captured scenario information for later CMO-side logic instead of
 writing a file. The script captures the same unit/contact fields as
 `cmo_scenario_export.lua`, assigns them to `CMO_COMBAT_ID_TRIGGER_RECORDS` and
 `CMO_COMBAT_ID_TRIGGER_SNAPSHOT`, and persists each JSON record with
-`ScenEdit_SetKeyValue`.
+`ScenEdit_SetKeyValue` when available. In CMO event contexts that expose Lua
+APIs as callable `userdata` instead of `function`, the helper treats those APIs
+as available and calls them under `pcall`. If scenario key-value APIs are absent,
+it still stores the same key/value payload in the global
+`CMO_COMBAT_ID_TRIGGER_KEYVALUES` table for same-action follow-up logic.
 
 Example event action body:
 
@@ -152,18 +156,27 @@ ScenEdit_RunScript('cmo_triggered_snapshot.lua')
 ```
 
 After the event fires, retrieve records from the scenario key-values without
-using file I/O:
+using file I/O. If `ScenEdit_GetKeyValue` is unavailable in the triggering
+context, read the same keys from `CMO_COMBAT_ID_TRIGGER_KEYVALUES` instead:
 
 ```lua
-local snapshot_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_snapshot_count') or '0') or 0
-local record_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_record_count') or '0') or 0
-for i = 1, record_count do
-  print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_' .. tostring(i)))
+local function read_trigger_value(key)
+  if type(ScenEdit_GetKeyValue) == 'function' or type(ScenEdit_GetKeyValue) == 'userdata' then
+    local ok, value = pcall(function() return ScenEdit_GetKeyValue(key) end)
+    if ok and value ~= nil then return value end
+  end
+  return CMO_COMBAT_ID_TRIGGER_KEYVALUES and CMO_COMBAT_ID_TRIGGER_KEYVALUES[key]
 end
 
-local debug_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_count') or '0') or 0
+local snapshot_count = tonumber(read_trigger_value('CMO_COMBAT_ID_TRIGGER_snapshot_count') or '0') or 0
+local record_count = tonumber(read_trigger_value('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_record_count') or '0') or 0
+for i = 1, record_count do
+  print(read_trigger_value('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_' .. tostring(i)))
+end
+
+local debug_count = tonumber(read_trigger_value('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_count') or '0') or 0
 for i = 1, debug_count do
-  print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_' .. tostring(i)))
+  print(read_trigger_value('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_' .. tostring(i)))
 end
 ```
 
