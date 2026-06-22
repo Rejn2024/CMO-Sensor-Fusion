@@ -191,6 +191,45 @@ local function context_value(context, ...)
   return nil
 end
 
+
+local function append_unique_record(records, appended, kind, side_name, object, extra)
+  if type(object) ~= 'table' or appended[object] ~= nil then return false end
+  table.insert(records, make_record(kind, side_name, object, extra))
+  appended[object] = true
+  return true
+end
+
+local function safe_call_global(function_name)
+  local fn = _G[function_name]
+  if type(fn) ~= 'function' then return nil end
+  local ok, value = pcall(fn)
+  if ok then return value end
+  return nil
+end
+
+local function side_name_for_object(object, fallback)
+  local side_value = field(object, 'side', 'Side')
+  if type(side_value) == 'table' then side_value = field(side_value, 'name', 'Name') end
+  return side_value or field(object, 'actualside', 'ActualSide', 'actual_side') or fallback or 'EventTrigger'
+end
+
+local function append_trigger_function_records(records)
+  local appended = {}
+
+  -- In CMO event actions, ScenEdit_UnitX()/UnitX() returns the activating unit
+  -- and ScenEdit_UnitY()/UnitY() returns the detecting unit for detection-style
+  -- triggers. These are available even when EventContext or side sweeps are not.
+  local trigger_objects = {
+    {kind='event_trigger_unit', value=safe_call_global('ScenEdit_UnitX') or safe_call_global('UnitX')},
+    {kind='event_detecting_unit', value=safe_call_global('ScenEdit_UnitY') or safe_call_global('UnitY')},
+  }
+
+  for _, entry in ipairs(trigger_objects) do
+    local object = entry.value
+    append_unique_record(records, appended, entry.kind, side_name_for_object(object), object, {event_trigger_function = entry.kind})
+  end
+end
+
 local function append_event_context_records(records)
   if type(EventContext) ~= 'table' then return end
 
@@ -207,11 +246,7 @@ local function append_event_context_records(records)
 
   local appended = {}
   for _, entry in ipairs(context_objects) do
-    local value = entry.value
-    if type(value) == 'table' and appended[value] == nil then
-      table.insert(records, make_record(entry.kind, side_name, value, {event_context = EventContext}))
-      appended[value] = true
-    end
+    append_unique_record(records, appended, entry.kind, side_name, entry.value, {event_context = EventContext})
   end
 
   if next(appended) == nil then
@@ -255,12 +290,18 @@ local function append_side_records(records, side)
 end
 
 local records = {}
+append_trigger_function_records(records)
 append_event_context_records(records)
 local ok_sides, sides = pcall(function() return VP_GetSides() end)
+if (not ok_sides or sides == nil) and type(ScenEdit_GetSides) == 'function' then
+  ok_sides, sides = pcall(function() return ScenEdit_GetSides() end)
+end
 if ok_sides and sides ~= nil then
   for _, side in ipairs(list_items(sides)) do append_side_records(records, side) end
+elseif #records == 0 then
+  error('Unable to enumerate CMO sides with VP_GetSides()/ScenEdit_GetSides(), and no event trigger records were available')
 else
-  error('Unable to enumerate CMO sides with VP_GetSides()')
+  print('WARNING: Unable to enumerate CMO sides; storing event trigger records only')
 end
 
 local snapshot_count_key = keyvalue_prefix .. '_snapshot_count'
