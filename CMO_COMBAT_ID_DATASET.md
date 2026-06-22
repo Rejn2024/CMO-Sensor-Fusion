@@ -150,6 +150,13 @@ CMO_COMBAT_ID_TRIGGER_PRINT_JSONL = true
 ScenEdit_RunScript('cmo_triggered_snapshot.lua')
 ```
 
+The triggered helper first records the event's `EventContext` objects (for
+example the detected contact/unit and detecting unit) and then attempts a full
+side/unit/contact sweep. This is important because some CMO event-action
+contexts do not expose the same iterable side, unit, or contact collections that
+are available from an interactive Lua console; relying only on the sweep can
+produce a snapshot with `0` assigned records even though the event fired.
+
 After the event fires, retrieve records from the scenario key-values without
 using file I/O:
 

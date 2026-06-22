@@ -149,9 +149,79 @@ local function record_to_json(record)
   return '{' .. table.concat(parts, ',') .. '}'
 end
 
+
+local function list_items(value)
+  if type(value) ~= 'table' then return {} end
+
+  local items = {}
+  local seen = {}
+  local function append(item)
+    if item ~= nil and type(item) ~= 'function' and seen[item] == nil then
+      table.insert(items, item)
+      seen[item] = true
+    end
+  end
+
+  for _, item in pairs(value) do append(item) end
+
+  local count = field(value, 'count', 'Count')
+  if tonumber(count) ~= nil then
+    for index = 0, tonumber(count) do
+      local ok, item = pcall(function() return value[index] end)
+      if ok then append(item) end
+    end
+  end
+
+  for _, container_key in ipairs({'items', 'Items', 'units', 'Units', 'contacts', 'Contacts', 'sides', 'Sides'}) do
+    local container = field(value, container_key)
+    if type(container) == 'table' and container ~= value then
+      for _, item in ipairs(list_items(container)) do append(item) end
+    end
+  end
+
+  return items
+end
+
+local function context_value(context, ...)
+  if type(context) ~= 'table' then return nil end
+  for _, key in ipairs({...}) do
+    local value = field(context, key)
+    if value ~= nil then return value end
+  end
+  return nil
+end
+
+local function append_event_context_records(records)
+  if type(EventContext) ~= 'table' then return end
+
+  local side_name = context_value(EventContext, 'SideName', 'sideName', 'side', 'Side')
+  if type(side_name) == 'table' then side_name = field(side_name, 'name', 'Name') end
+  side_name = side_name or context_value(EventContext, 'detectorSideName', 'DetectorSideName') or 'EventContext'
+
+  local context_objects = {
+    {kind='event_context_unit', value=context_value(EventContext, 'Unit', 'unit', 'SubjectUnit', 'subjectUnit', 'DetectedUnit', 'detectedUnit', 'TargetUnit', 'targetUnit')},
+    {kind='event_context_contact', value=context_value(EventContext, 'Contact', 'contact', 'DetectedContact', 'detectedContact', 'TargetContact', 'targetContact')},
+    {kind='event_context_detector', value=context_value(EventContext, 'Detector', 'detector', 'DetectingUnit', 'detectingUnit')},
+    {kind='event_context_weapon', value=context_value(EventContext, 'Weapon', 'weapon')},
+  }
+
+  local appended = {}
+  for _, entry in ipairs(context_objects) do
+    local value = entry.value
+    if type(value) == 'table' and appended[value] == nil then
+      table.insert(records, make_record(entry.kind, side_name, value, {event_context = EventContext}))
+      appended[value] = true
+    end
+  end
+
+  if next(appended) == nil then
+    table.insert(records, make_record('event_context', side_name, EventContext, {event_context = EventContext}))
+  end
+end
+
 local function append_child_records(records, side_name, parent_kind, parent, child_kind, children)
   if children == nil or type(children) ~= 'table' then return end
-  for _, child in pairs(children) do
+  for _, child in ipairs(list_items(children)) do
     if type(child) == 'table' then
       table.insert(records, make_record(child_kind, side_name, child, {
         parent_record_kind = parent_kind,
@@ -175,19 +245,20 @@ local function append_side_records(records, side)
 
   local ok_units, units = pcall(function() return ScenEdit_GetUnits({side=side_name}) end)
   if ok_units and units ~= nil then
-    for _, unit in pairs(units) do append_platform_records(records, 'unit', side_name, unit) end
+    for _, unit in ipairs(list_items(units)) do append_platform_records(records, 'unit', side_name, unit) end
   end
 
   local ok_contacts, contacts = pcall(function() return ScenEdit_GetContacts(side_name) end)
   if ok_contacts and contacts ~= nil then
-    for _, contact in pairs(contacts) do append_platform_records(records, 'contact', side_name, contact) end
+    for _, contact in ipairs(list_items(contacts)) do append_platform_records(records, 'contact', side_name, contact) end
   end
 end
 
 local records = {}
+append_event_context_records(records)
 local ok_sides, sides = pcall(function() return VP_GetSides() end)
 if ok_sides and sides ~= nil then
-  for _, side in pairs(sides) do append_side_records(records, side) end
+  for _, side in ipairs(list_items(sides)) do append_side_records(records, side) end
 else
   error('Unable to enumerate CMO sides with VP_GetSides()')
 end
