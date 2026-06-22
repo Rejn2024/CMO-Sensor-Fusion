@@ -90,8 +90,13 @@ local function json_value(value, depth, seen)
   return '{' .. table.concat(parts, ',') .. '}'
 end
 
+local function is_object(value)
+  local value_type = type(value)
+  return value_type == 'table' or value_type == 'userdata'
+end
+
 local function field(object, ...)
-  if type(object) ~= 'table' then return nil end
+  if not is_object(object) then return nil end
   for _, key in ipairs({...}) do
     local ok, value = pcall(function() return object[key] end)
     if ok and value ~= nil and value ~= '' then return value end
@@ -207,6 +212,139 @@ local function record_to_json(record)
   return '{' .. table.concat(parts, ',') .. '}'
 end
 
+
+local function list_items(value)
+  if not is_object(value) then return {} end
+
+  local items = {}
+  local seen = {}
+  local function append(item)
+    if item ~= nil and type(item) ~= 'function' and seen[item] == nil then
+      table.insert(items, item)
+      seen[item] = true
+    end
+  end
+
+  pcall(function()
+    for _, item in pairs(value) do append(item) end
+  end)
+
+  local count = field(value, 'count', 'Count')
+  if tonumber(count) ~= nil then
+    for index = 0, tonumber(count) do
+      local ok, item = pcall(function() return value[index] end)
+      if ok then append(item) end
+    end
+  end
+
+  for _, container_key in ipairs({'items', 'Items', 'units', 'Units', 'contacts', 'Contacts', 'sides', 'Sides'}) do
+    local container = field(value, container_key)
+    if is_object(container) and container ~= value then
+      for _, item in ipairs(list_items(container)) do append(item) end
+    end
+  end
+
+  return items
+end
+
+local function context_value(context, ...)
+  if not is_object(context) then return nil end
+  for _, key in ipairs({...}) do
+    local value = field(context, key)
+    if value ~= nil then return value end
+  end
+  return nil
+end
+
+
+local function append_unique_record(records, appended, kind, side_name, object, extra)
+  if not is_object(object) or appended[object] ~= nil then return false end
+  table.insert(records, make_record(kind, side_name, object, extra))
+  appended[object] = true
+  return true
+end
+
+local function safe_call_global(function_name)
+  local fn = _G[function_name]
+  if type(fn) ~= 'function' then return nil end
+  local ok, value = pcall(fn)
+  if ok then return value end
+  return nil
+end
+
+local function side_name_for_object(object, fallback)
+  local side_value = field(object, 'side', 'Side')
+  if is_object(side_value) then side_value = field(side_value, 'name', 'Name') end
+  return side_value or field(object, 'actualside', 'ActualSide', 'actual_side') or fallback or 'EventTrigger'
+end
+
+
+local function side_name_for_side(side)
+  local side_name = field(side, 'name', 'Name')
+  if side_name ~= nil then return side_name end
+
+  local side_text = tostring(side or '')
+  side_name = side_text:match("name%s*=%s*'([^']+)'") or side_text:match('name%s*=%s*"([^"]+)"')
+  if side_name ~= nil and side_name ~= '' then return side_name end
+
+  return nil
+end
+
+local append_platform_records
+
+local function append_side_container_records(records, side_name, side)
+  local embedded_units = field(side, 'units', 'Units')
+  if embedded_units ~= nil then
+    for _, unit in ipairs(list_items(embedded_units)) do append_platform_records(records, 'unit', side_name, unit) end
+  end
+
+  local embedded_contacts = field(side, 'contacts', 'Contacts')
+  if embedded_contacts ~= nil then
+    for _, contact in ipairs(list_items(embedded_contacts)) do append_platform_records(records, 'contact', side_name, contact) end
+  end
+end
+
+local function append_trigger_function_records(records)
+  local appended = {}
+
+  -- In CMO event actions, ScenEdit_UnitX()/UnitX() returns the activating unit
+  -- and ScenEdit_UnitY()/UnitY() returns the detecting unit for detection-style
+  -- triggers. These are available even when EventContext or side sweeps are not.
+  local trigger_objects = {
+    {kind='event_trigger_unit', value=safe_call_global('ScenEdit_UnitX') or safe_call_global('UnitX')},
+    {kind='event_detecting_unit', value=safe_call_global('ScenEdit_UnitY') or safe_call_global('UnitY')},
+  }
+
+  for _, entry in ipairs(trigger_objects) do
+    local object = entry.value
+    append_unique_record(records, appended, entry.kind, side_name_for_object(object), object, {event_trigger_function = entry.kind})
+  end
+end
+
+local function append_event_context_records(records)
+  if not is_object(EventContext) then return end
+
+  local side_name = context_value(EventContext, 'SideName', 'sideName', 'side', 'Side')
+  if is_object(side_name) then side_name = field(side_name, 'name', 'Name') end
+  side_name = side_name or context_value(EventContext, 'detectorSideName', 'DetectorSideName') or 'EventContext'
+
+  local context_objects = {
+    {kind='event_context_unit', value=context_value(EventContext, 'Unit', 'unit', 'SubjectUnit', 'subjectUnit', 'DetectedUnit', 'detectedUnit', 'TargetUnit', 'targetUnit')},
+    {kind='event_context_contact', value=context_value(EventContext, 'Contact', 'contact', 'DetectedContact', 'detectedContact', 'TargetContact', 'targetContact')},
+    {kind='event_context_detector', value=context_value(EventContext, 'Detector', 'detector', 'DetectingUnit', 'detectingUnit')},
+    {kind='event_context_weapon', value=context_value(EventContext, 'Weapon', 'weapon')},
+  }
+
+  local appended = {}
+  for _, entry in ipairs(context_objects) do
+    append_unique_record(records, appended, entry.kind, side_name, entry.value, {event_context = EventContext})
+  end
+
+  if next(appended) == nil then
+    table.insert(records, make_record('event_context', side_name, EventContext, {event_context = EventContext}))
+  end
+end
+
 local function append_child_records(records, side_name, parent_kind, parent, child_kind, children)
   if children == nil or type(children) ~= 'table' then return end
   for _, child in pairs(children) do
@@ -220,7 +358,7 @@ local function append_child_records(records, side_name, parent_kind, parent, chi
   end
 end
 
-local function append_platform_records(records, kind, side_name, object)
+append_platform_records = function(records, kind, side_name, object)
   table.insert(records, make_record(kind, side_name, object, nil))
   append_child_records(records, side_name, kind, object, kind .. '_sensor', field(object, 'sensors', 'Sensors'))
   append_child_records(records, side_name, kind, object, kind .. '_component', field(object, 'components', 'Components'))
@@ -229,39 +367,38 @@ local function append_platform_records(records, kind, side_name, object)
 end
 
 local function append_side_records(records, side)
-  local side_name = field(side, 'name', 'Name') or tostring(side)
-  local before_count = #records
-  debug('Inspecting side "' .. tostring(side_name) .. '"')
+  local side_name = side_name_for_side(side)
+  if side_name == nil then return end
 
-  if not api_is_present(ScenEdit_GetUnits) then
-    debug('ScenEdit_GetUnits is unavailable for side "' .. tostring(side_name) .. '"')
-  else
+  append_side_container_records(records, side_name, side)
+
+  if type(ScenEdit_GetUnits) == 'function' then
     local ok_units, units = pcall(function() return ScenEdit_GetUnits({side=side_name}) end)
     if ok_units and units ~= nil then
-      debug('ScenEdit_GetUnits returned ' .. tostring(table_count(units)) .. ' units for side "' .. tostring(side_name) .. '"')
-      for _, unit in pairs(units) do append_platform_records(records, 'unit', side_name, unit) end
-    elseif ok_units then
-      debug('ScenEdit_GetUnits returned nil for side "' .. tostring(side_name) .. '"')
-    else
-      debug('ScenEdit_GetUnits failed for side "' .. tostring(side_name) .. '": ' .. tostring(units))
+      for _, unit in ipairs(list_items(units)) do append_platform_records(records, 'unit', side_name, unit) end
     end
   end
 
-  if not api_is_present(ScenEdit_GetContacts) then
-    debug('ScenEdit_GetContacts is unavailable for side "' .. tostring(side_name) .. '"')
-  else
+  if type(ScenEdit_GetContacts) == 'function' then
     local ok_contacts, contacts = pcall(function() return ScenEdit_GetContacts(side_name) end)
     if ok_contacts and contacts ~= nil then
-      debug('ScenEdit_GetContacts returned ' .. tostring(table_count(contacts)) .. ' contacts for side "' .. tostring(side_name) .. '"')
-      for _, contact in pairs(contacts) do append_platform_records(records, 'contact', side_name, contact) end
-    elseif ok_contacts then
-      debug('ScenEdit_GetContacts returned nil for side "' .. tostring(side_name) .. '"')
-    else
-      debug('ScenEdit_GetContacts failed for side "' .. tostring(side_name) .. '": ' .. tostring(contacts))
+      for _, contact in ipairs(list_items(contacts)) do append_platform_records(records, 'contact', side_name, contact) end
     end
   end
 
-  debug('Side "' .. tostring(side_name) .. '" added ' .. tostring(#records - before_count) .. ' records')
+local records = {}
+append_trigger_function_records(records)
+append_event_context_records(records)
+local ok_sides, sides = pcall(function() return VP_GetSides() end)
+if (not ok_sides or sides == nil) and type(ScenEdit_GetSides) == 'function' then
+  ok_sides, sides = pcall(function() return ScenEdit_GetSides() end)
+end
+if ok_sides and sides ~= nil then
+  for _, side in ipairs(list_items(sides)) do append_side_records(records, side) end
+elseif #records == 0 then
+  error('Unable to enumerate CMO sides with VP_GetSides()/ScenEdit_GetSides(), and no event trigger records were available')
+else
+  print('WARNING: Unable to enumerate CMO sides; storing event trigger records only')
 end
 
 local function run_snapshot()
