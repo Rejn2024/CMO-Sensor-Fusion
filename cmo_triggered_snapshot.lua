@@ -20,6 +20,15 @@
 
 local keyvalue_prefix = CMO_COMBAT_ID_TRIGGER_KEY_PREFIX or 'CMO_COMBAT_ID_TRIGGER'
 local print_jsonl_to_console = CMO_COMBAT_ID_TRIGGER_PRINT_JSONL ~= false
+local debug_enabled = CMO_COMBAT_ID_TRIGGER_DEBUG ~= false
+local debug_messages = {}
+
+local function debug(message)
+  if not debug_enabled then return end
+  local line = 'CMO_TRIGGER_DEBUG: ' .. tostring(message)
+  table.insert(debug_messages, line)
+  print(line)
+end
 
 local function json_escape(value)
   if value == nil then return '' end
@@ -91,7 +100,41 @@ end
 local function current_time()
   local ok, now = pcall(function() return ScenEdit_CurrentTime() end)
   if ok then return now end
+  debug('ScenEdit_CurrentTime failed: ' .. tostring(now))
   return nil
+end
+
+local function table_count(value)
+  if type(value) ~= 'table' then return 0 end
+  local count = 0
+  for _, _ in pairs(value) do count = count + 1 end
+  return count
+end
+
+local function safe_get_key_value(key)
+  if type(ScenEdit_GetKeyValue) ~= 'function' then
+    debug('ScenEdit_GetKeyValue is unavailable while reading ' .. tostring(key))
+    return nil
+  end
+  local ok, value = pcall(function() return ScenEdit_GetKeyValue(key) end)
+  if not ok then
+    debug('ScenEdit_GetKeyValue failed for ' .. tostring(key) .. ': ' .. tostring(value))
+    return nil
+  end
+  return value
+end
+
+local function safe_set_key_value(key, value)
+  if type(ScenEdit_SetKeyValue) ~= 'function' then
+    debug('ScenEdit_SetKeyValue is unavailable while writing ' .. tostring(key))
+    return false
+  end
+  local ok, err = pcall(function() return ScenEdit_SetKeyValue(key, value) end)
+  if not ok then
+    debug('ScenEdit_SetKeyValue failed for ' .. tostring(key) .. ': ' .. tostring(err))
+    return false
+  end
+  return true
 end
 
 local function make_record(kind, side_name, object, extra)
@@ -149,114 +192,9 @@ local function record_to_json(record)
   return '{' .. table.concat(parts, ',') .. '}'
 end
 
-
-local function list_items(value)
-  if type(value) ~= 'table' then return {} end
-
-  local items = {}
-  local seen = {}
-  local function append(item)
-    if item ~= nil and type(item) ~= 'function' and seen[item] == nil then
-      table.insert(items, item)
-      seen[item] = true
-    end
-  end
-
-  for _, item in pairs(value) do append(item) end
-
-  local count = field(value, 'count', 'Count')
-  if tonumber(count) ~= nil then
-    for index = 0, tonumber(count) do
-      local ok, item = pcall(function() return value[index] end)
-      if ok then append(item) end
-    end
-  end
-
-  for _, container_key in ipairs({'items', 'Items', 'units', 'Units', 'contacts', 'Contacts', 'sides', 'Sides'}) do
-    local container = field(value, container_key)
-    if type(container) == 'table' and container ~= value then
-      for _, item in ipairs(list_items(container)) do append(item) end
-    end
-  end
-
-  return items
-end
-
-local function context_value(context, ...)
-  if type(context) ~= 'table' then return nil end
-  for _, key in ipairs({...}) do
-    local value = field(context, key)
-    if value ~= nil then return value end
-  end
-  return nil
-end
-
-
-local function append_unique_record(records, appended, kind, side_name, object, extra)
-  if type(object) ~= 'table' or appended[object] ~= nil then return false end
-  table.insert(records, make_record(kind, side_name, object, extra))
-  appended[object] = true
-  return true
-end
-
-local function safe_call_global(function_name)
-  local fn = _G[function_name]
-  if type(fn) ~= 'function' then return nil end
-  local ok, value = pcall(fn)
-  if ok then return value end
-  return nil
-end
-
-local function side_name_for_object(object, fallback)
-  local side_value = field(object, 'side', 'Side')
-  if type(side_value) == 'table' then side_value = field(side_value, 'name', 'Name') end
-  return side_value or field(object, 'actualside', 'ActualSide', 'actual_side') or fallback or 'EventTrigger'
-end
-
-local function append_trigger_function_records(records)
-  local appended = {}
-
-  -- In CMO event actions, ScenEdit_UnitX()/UnitX() returns the activating unit
-  -- and ScenEdit_UnitY()/UnitY() returns the detecting unit for detection-style
-  -- triggers. These are available even when EventContext or side sweeps are not.
-  local trigger_objects = {
-    {kind='event_trigger_unit', value=safe_call_global('ScenEdit_UnitX') or safe_call_global('UnitX')},
-    {kind='event_detecting_unit', value=safe_call_global('ScenEdit_UnitY') or safe_call_global('UnitY')},
-  }
-
-  for _, entry in ipairs(trigger_objects) do
-    local object = entry.value
-    append_unique_record(records, appended, entry.kind, side_name_for_object(object), object, {event_trigger_function = entry.kind})
-  end
-end
-
-local function append_event_context_records(records)
-  if type(EventContext) ~= 'table' then return end
-
-  local side_name = context_value(EventContext, 'SideName', 'sideName', 'side', 'Side')
-  if type(side_name) == 'table' then side_name = field(side_name, 'name', 'Name') end
-  side_name = side_name or context_value(EventContext, 'detectorSideName', 'DetectorSideName') or 'EventContext'
-
-  local context_objects = {
-    {kind='event_context_unit', value=context_value(EventContext, 'Unit', 'unit', 'SubjectUnit', 'subjectUnit', 'DetectedUnit', 'detectedUnit', 'TargetUnit', 'targetUnit')},
-    {kind='event_context_contact', value=context_value(EventContext, 'Contact', 'contact', 'DetectedContact', 'detectedContact', 'TargetContact', 'targetContact')},
-    {kind='event_context_detector', value=context_value(EventContext, 'Detector', 'detector', 'DetectingUnit', 'detectingUnit')},
-    {kind='event_context_weapon', value=context_value(EventContext, 'Weapon', 'weapon')},
-  }
-
-  local appended = {}
-  for _, entry in ipairs(context_objects) do
-    append_unique_record(records, appended, entry.kind, side_name, entry.value, {event_context = EventContext})
-  end
-
-  if next(appended) == nil then
-    table.insert(records, make_record('event_context', side_name, EventContext, {event_context = EventContext}))
-  end
-end
-
 local function append_child_records(records, side_name, parent_kind, parent, child_kind, children)
   if children == nil or type(children) ~= 'table' then return end
-  for _, child in ipairs(list_items(children)) do
+  for _, child in pairs(children) do
     if type(child) == 'table' then
       table.insert(records, make_record(child_kind, side_name, child, {
         parent_record_kind = parent_kind,
@@ -277,56 +215,114 @@ end
 
 local function append_side_records(records, side)
   local side_name = field(side, 'name', 'Name') or tostring(side)
+  local before_count = #records
+  debug('Inspecting side "' .. tostring(side_name) .. '"')
 
-  local ok_units, units = pcall(function() return ScenEdit_GetUnits({side=side_name}) end)
-  if ok_units and units ~= nil then
-    for _, unit in ipairs(list_items(units)) do append_platform_records(records, 'unit', side_name, unit) end
+  if type(ScenEdit_GetUnits) ~= 'function' then
+    debug('ScenEdit_GetUnits is unavailable for side "' .. tostring(side_name) .. '"')
+  else
+    local ok_units, units = pcall(function() return ScenEdit_GetUnits({side=side_name}) end)
+    if ok_units and units ~= nil then
+      debug('ScenEdit_GetUnits returned ' .. tostring(table_count(units)) .. ' units for side "' .. tostring(side_name) .. '"')
+      for _, unit in pairs(units) do append_platform_records(records, 'unit', side_name, unit) end
+    elseif ok_units then
+      debug('ScenEdit_GetUnits returned nil for side "' .. tostring(side_name) .. '"')
+    else
+      debug('ScenEdit_GetUnits failed for side "' .. tostring(side_name) .. '": ' .. tostring(units))
+    end
   end
 
-  local ok_contacts, contacts = pcall(function() return ScenEdit_GetContacts(side_name) end)
-  if ok_contacts and contacts ~= nil then
-    for _, contact in ipairs(list_items(contacts)) do append_platform_records(records, 'contact', side_name, contact) end
+  if type(ScenEdit_GetContacts) ~= 'function' then
+    debug('ScenEdit_GetContacts is unavailable for side "' .. tostring(side_name) .. '"')
+  else
+    local ok_contacts, contacts = pcall(function() return ScenEdit_GetContacts(side_name) end)
+    if ok_contacts and contacts ~= nil then
+      debug('ScenEdit_GetContacts returned ' .. tostring(table_count(contacts)) .. ' contacts for side "' .. tostring(side_name) .. '"')
+      for _, contact in pairs(contacts) do append_platform_records(records, 'contact', side_name, contact) end
+    elseif ok_contacts then
+      debug('ScenEdit_GetContacts returned nil for side "' .. tostring(side_name) .. '"')
+    else
+      debug('ScenEdit_GetContacts failed for side "' .. tostring(side_name) .. '": ' .. tostring(contacts))
+    end
   end
+
+  debug('Side "' .. tostring(side_name) .. '" added ' .. tostring(#records - before_count) .. ' records')
 end
 
-local records = {}
-append_trigger_function_records(records)
-append_event_context_records(records)
-local ok_sides, sides = pcall(function() return VP_GetSides() end)
-if (not ok_sides or sides == nil) and type(ScenEdit_GetSides) == 'function' then
-  ok_sides, sides = pcall(function() return ScenEdit_GetSides() end)
+local function run_snapshot()
+  debug('Triggered snapshot script started')
+  debug('Configuration prefix=' .. tostring(keyvalue_prefix) .. ', print_jsonl=' .. tostring(print_jsonl_to_console))
+  debug('API availability VP_GetSides=' .. tostring(type(VP_GetSides)) .. ', ScenEdit_GetUnits=' .. tostring(type(ScenEdit_GetUnits)) .. ', ScenEdit_GetContacts=' .. tostring(type(ScenEdit_GetContacts)) .. ', ScenEdit_SetKeyValue=' .. tostring(type(ScenEdit_SetKeyValue)))
+
+  local records = {}
+  local fatal_error = nil
+  if type(VP_GetSides) ~= 'function' then
+    fatal_error = 'VP_GetSides is unavailable'
+    debug(fatal_error)
+  else
+    local ok_sides, sides = pcall(function() return VP_GetSides() end)
+    if ok_sides and sides ~= nil then
+      debug('VP_GetSides returned ' .. tostring(table_count(sides)) .. ' sides')
+      for _, side in pairs(sides) do append_side_records(records, side) end
+    elseif ok_sides then
+      fatal_error = 'VP_GetSides returned nil'
+      debug(fatal_error)
+    else
+      fatal_error = 'VP_GetSides failed: ' .. tostring(sides)
+      debug(fatal_error)
+    end
+  end
+
+  local snapshot_count_key = keyvalue_prefix .. '_snapshot_count'
+  local snapshot_index = (tonumber(safe_get_key_value(snapshot_count_key) or '0') or 0) + 1
+  local snapshot_prefix = keyvalue_prefix .. '_' .. tostring(snapshot_index)
+
+  CMO_COMBAT_ID_TRIGGER_RECORDS = records
+  CMO_COMBAT_ID_TRIGGER_DEBUG_LOG = debug_messages
+  CMO_COMBAT_ID_TRIGGER_SNAPSHOT = {
+    export_schema = 'cmo_combat_id_trigger_snapshot_v1',
+    source = 'cmo_triggered_lua',
+    scenario_time = current_time(),
+    key_prefix = keyvalue_prefix,
+    snapshot_index = snapshot_index,
+    record_count = #records,
+    fatal_error = fatal_error,
+    debug_log = debug_messages,
+    records = records,
+  }
+
+  safe_set_key_value(snapshot_count_key, tostring(snapshot_index))
+  safe_set_key_value(snapshot_prefix .. '_record_count', tostring(#records))
+  safe_set_key_value(snapshot_prefix .. '_scenario_time', tostring(CMO_COMBAT_ID_TRIGGER_SNAPSHOT.scenario_time or ''))
+  if fatal_error ~= nil then
+    safe_set_key_value(snapshot_prefix .. '_fatal_error', fatal_error)
+  end
+
+  for index, record in ipairs(records) do
+    local line = record_to_json(record)
+    safe_set_key_value(snapshot_prefix .. '_' .. tostring(index), line)
+    if print_jsonl_to_console then print(line) end
+  end
+
+  safe_set_key_value(snapshot_prefix .. '_debug_count', tostring(#debug_messages))
+  for index, message in ipairs(debug_messages) do
+    safe_set_key_value(snapshot_prefix .. '_debug_' .. tostring(index), message)
+  end
+
+  debug('Triggered snapshot script finished with ' .. tostring(#records) .. ' records under ' .. snapshot_prefix)
+  safe_set_key_value(snapshot_prefix .. '_debug_count', tostring(#debug_messages))
+  safe_set_key_value(snapshot_prefix .. '_debug_' .. tostring(#debug_messages), debug_messages[#debug_messages] or '')
+  print('CMO triggered combat-ID snapshot assigned ' .. tostring(#records) .. ' records to CMO_COMBAT_ID_TRIGGER_RECORDS and key-values under ' .. snapshot_prefix)
 end
-if ok_sides and sides ~= nil then
-  for _, side in ipairs(list_items(sides)) do append_side_records(records, side) end
-elseif #records == 0 then
-  error('Unable to enumerate CMO sides with VP_GetSides()/ScenEdit_GetSides(), and no event trigger records were available')
-else
-  print('WARNING: Unable to enumerate CMO sides; storing event trigger records only')
+
+local ok, err = pcall(run_snapshot)
+if not ok then
+  debug('UNEXPECTED ERROR: ' .. tostring(err))
+  CMO_COMBAT_ID_TRIGGER_DEBUG_LOG = debug_messages
+  safe_set_key_value(keyvalue_prefix .. '_last_error', tostring(err))
+  safe_set_key_value(keyvalue_prefix .. '_last_debug_count', tostring(#debug_messages))
+  for index, message in ipairs(debug_messages) do
+    safe_set_key_value(keyvalue_prefix .. '_last_debug_' .. tostring(index), message)
+  end
+  error(err)
 end
-
-local snapshot_count_key = keyvalue_prefix .. '_snapshot_count'
-local snapshot_index = (tonumber(ScenEdit_GetKeyValue(snapshot_count_key) or '0') or 0) + 1
-local snapshot_prefix = keyvalue_prefix .. '_' .. tostring(snapshot_index)
-
-CMO_COMBAT_ID_TRIGGER_RECORDS = records
-CMO_COMBAT_ID_TRIGGER_SNAPSHOT = {
-  export_schema = 'cmo_combat_id_trigger_snapshot_v1',
-  source = 'cmo_triggered_lua',
-  scenario_time = current_time(),
-  key_prefix = keyvalue_prefix,
-  snapshot_index = snapshot_index,
-  record_count = #records,
-  records = records,
-}
-
-ScenEdit_SetKeyValue(snapshot_count_key, tostring(snapshot_index))
-ScenEdit_SetKeyValue(snapshot_prefix .. '_record_count', tostring(#records))
-ScenEdit_SetKeyValue(snapshot_prefix .. '_scenario_time', tostring(CMO_COMBAT_ID_TRIGGER_SNAPSHOT.scenario_time or ''))
-
-for index, record in ipairs(records) do
-  local line = record_to_json(record)
-  ScenEdit_SetKeyValue(snapshot_prefix .. '_' .. tostring(index), line)
-  if print_jsonl_to_console then print(line) end
-end
-
-print('CMO triggered combat-ID snapshot assigned ' .. tostring(#records) .. ' records to CMO_COMBAT_ID_TRIGGER_RECORDS and key-values under ' .. snapshot_prefix)

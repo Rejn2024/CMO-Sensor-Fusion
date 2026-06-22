@@ -147,16 +147,9 @@ Example event action body:
 ```lua
 CMO_COMBAT_ID_TRIGGER_KEY_PREFIX = 'CMO_COMBAT_ID_TRIGGER'
 CMO_COMBAT_ID_TRIGGER_PRINT_JSONL = true
+CMO_COMBAT_ID_TRIGGER_DEBUG = true
 ScenEdit_RunScript('cmo_triggered_snapshot.lua')
 ```
-
-The triggered helper first records event-trigger objects returned by
-`ScenEdit_UnitX()`/`UnitX()` and `ScenEdit_UnitY()`/`UnitY()`, then records any
-`EventContext` objects, and finally attempts a full side/unit/contact sweep.
-This is important because some CMO event-action contexts do not expose the same
-iterable side, unit, or contact collections that are available from an
-interactive Lua console; relying only on the sweep can produce a snapshot with
-`0` assigned records even though the event fired.
 
 After the event fires, retrieve records from the scenario key-values without
 using file I/O:
@@ -167,7 +160,18 @@ local record_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. t
 for i = 1, record_count do
   print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_' .. tostring(i)))
 end
+
+local debug_count = tonumber(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_count') or '0') or 0
+for i = 1, debug_count do
+  print(ScenEdit_GetKeyValue('CMO_COMBAT_ID_TRIGGER_' .. tostring(snapshot_count) .. '_debug_' .. tostring(i)))
+end
 ```
+
+Debug logging is enabled by default. Each trigger prints and stores the selected
+key prefix, API availability, side count, per-side unit/contact counts, key-value
+write failures, fatal enumeration errors, and any unexpected top-level error. Set
+`CMO_COMBAT_ID_TRIGGER_DEBUG = false` only after the event is known to be firing
+and writing records correctly.
 
 ### 8. Recover console-mirrored JSONL from a CMO Logs text file
 
