@@ -13,6 +13,7 @@
 --   <prefix>_snapshot_count                 -- total snapshots captured
 --   <prefix>_<snapshot>_record_count        -- records in this snapshot
 --   <prefix>_<snapshot>_<record>            -- JSON record for retrieval/logging
+--   CMO_COMBAT_ID_TRIGGER_KEYVALUES          -- in-memory fallback key/value table
 --
 -- Optional settings before running the event action:
 --   CMO_COMBAT_ID_TRIGGER_KEY_PREFIX = 'CMO_COMBAT_ID_TRIGGER'
@@ -20,6 +21,16 @@
 
 local keyvalue_prefix = CMO_COMBAT_ID_TRIGGER_KEY_PREFIX or 'CMO_COMBAT_ID_TRIGGER'
 local print_jsonl_to_console = CMO_COMBAT_ID_TRIGGER_PRINT_JSONL ~= false
+local debug_enabled = CMO_COMBAT_ID_TRIGGER_DEBUG ~= false
+local debug_messages = {}
+CMO_COMBAT_ID_TRIGGER_KEYVALUES = CMO_COMBAT_ID_TRIGGER_KEYVALUES or {}
+
+local function debug(message)
+  if not debug_enabled then return end
+  local line = 'CMO_TRIGGER_DEBUG: ' .. tostring(message)
+  table.insert(debug_messages, line)
+  print(line)
+end
 
 local function json_escape(value)
   if value == nil then return '' end
@@ -96,7 +107,54 @@ end
 local function current_time()
   local ok, now = pcall(function() return ScenEdit_CurrentTime() end)
   if ok then return now end
+  debug('ScenEdit_CurrentTime failed: ' .. tostring(now))
   return nil
+end
+
+local function table_count(value)
+  if type(value) ~= 'table' then return 0 end
+  local count = 0
+  for _, _ in pairs(value) do count = count + 1 end
+  return count
+end
+
+local function api_is_present(api)
+  local api_type = type(api)
+  return api_type == 'function' or api_type == 'userdata'
+end
+
+local function api_type(name)
+  return tostring(type(_G[name]))
+end
+
+local function safe_get_key_value(key)
+  if CMO_COMBAT_ID_TRIGGER_KEYVALUES[key] ~= nil then
+    return CMO_COMBAT_ID_TRIGGER_KEYVALUES[key]
+  end
+  if not api_is_present(ScenEdit_GetKeyValue) then
+    debug('ScenEdit_GetKeyValue is unavailable while reading ' .. tostring(key) .. '; using in-memory fallback')
+    return nil
+  end
+  local ok, value = pcall(function() return ScenEdit_GetKeyValue(key) end)
+  if not ok then
+    debug('ScenEdit_GetKeyValue failed for ' .. tostring(key) .. ': ' .. tostring(value))
+    return nil
+  end
+  return value
+end
+
+local function safe_set_key_value(key, value)
+  CMO_COMBAT_ID_TRIGGER_KEYVALUES[key] = value
+  if not api_is_present(ScenEdit_SetKeyValue) then
+    debug('ScenEdit_SetKeyValue is unavailable while writing ' .. tostring(key) .. '; stored in CMO_COMBAT_ID_TRIGGER_KEYVALUES only')
+    return false
+  end
+  local ok, err = pcall(function() return ScenEdit_SetKeyValue(key, value) end)
+  if not ok then
+    debug('ScenEdit_SetKeyValue failed for ' .. tostring(key) .. ': ' .. tostring(err))
+    return false
+  end
+  return true
 end
 
 local function make_record(kind, side_name, object, extra)
@@ -289,7 +347,7 @@ end
 
 local function append_child_records(records, side_name, parent_kind, parent, child_kind, children)
   if children == nil or type(children) ~= 'table' then return end
-  for _, child in ipairs(list_items(children)) do
+  for _, child in pairs(children) do
     if type(child) == 'table' then
       table.insert(records, make_record(child_kind, side_name, child, {
         parent_record_kind = parent_kind,
@@ -327,7 +385,6 @@ local function append_side_records(records, side)
       for _, contact in ipairs(list_items(contacts)) do append_platform_records(records, 'contact', side_name, contact) end
     end
   end
-end
 
 local records = {}
 append_trigger_function_records(records)
@@ -344,29 +401,80 @@ else
   print('WARNING: Unable to enumerate CMO sides; storing event trigger records only')
 end
 
-local snapshot_count_key = keyvalue_prefix .. '_snapshot_count'
-local snapshot_index = (tonumber(ScenEdit_GetKeyValue(snapshot_count_key) or '0') or 0) + 1
-local snapshot_prefix = keyvalue_prefix .. '_' .. tostring(snapshot_index)
+local function run_snapshot()
+  debug('Triggered snapshot script started')
+  debug('Configuration prefix=' .. tostring(keyvalue_prefix) .. ', print_jsonl=' .. tostring(print_jsonl_to_console))
+  debug('API availability VP_GetSides=' .. api_type('VP_GetSides') .. ', ScenEdit_GetUnits=' .. api_type('ScenEdit_GetUnits') .. ', ScenEdit_GetContacts=' .. api_type('ScenEdit_GetContacts') .. ', ScenEdit_GetKeyValue=' .. api_type('ScenEdit_GetKeyValue') .. ', ScenEdit_SetKeyValue=' .. api_type('ScenEdit_SetKeyValue'))
 
-CMO_COMBAT_ID_TRIGGER_RECORDS = records
-CMO_COMBAT_ID_TRIGGER_SNAPSHOT = {
-  export_schema = 'cmo_combat_id_trigger_snapshot_v1',
-  source = 'cmo_triggered_lua',
-  scenario_time = current_time(),
-  key_prefix = keyvalue_prefix,
-  snapshot_index = snapshot_index,
-  record_count = #records,
-  records = records,
-}
+  local records = {}
+  local fatal_error = nil
+  if not api_is_present(VP_GetSides) then
+    fatal_error = 'VP_GetSides is unavailable'
+    debug(fatal_error)
+  else
+    local ok_sides, sides = pcall(function() return VP_GetSides() end)
+    if ok_sides and sides ~= nil then
+      debug('VP_GetSides returned ' .. tostring(table_count(sides)) .. ' sides')
+      for _, side in pairs(sides) do append_side_records(records, side) end
+    elseif ok_sides then
+      fatal_error = 'VP_GetSides returned nil'
+      debug(fatal_error)
+    else
+      fatal_error = 'VP_GetSides failed: ' .. tostring(sides)
+      debug(fatal_error)
+    end
+  end
 
-ScenEdit_SetKeyValue(snapshot_count_key, tostring(snapshot_index))
-ScenEdit_SetKeyValue(snapshot_prefix .. '_record_count', tostring(#records))
-ScenEdit_SetKeyValue(snapshot_prefix .. '_scenario_time', tostring(CMO_COMBAT_ID_TRIGGER_SNAPSHOT.scenario_time or ''))
+  local snapshot_count_key = keyvalue_prefix .. '_snapshot_count'
+  local snapshot_index = (tonumber(safe_get_key_value(snapshot_count_key) or '0') or 0) + 1
+  local snapshot_prefix = keyvalue_prefix .. '_' .. tostring(snapshot_index)
 
-for index, record in ipairs(records) do
-  local line = record_to_json(record)
-  ScenEdit_SetKeyValue(snapshot_prefix .. '_' .. tostring(index), line)
-  if print_jsonl_to_console then print(line) end
+  CMO_COMBAT_ID_TRIGGER_RECORDS = records
+  CMO_COMBAT_ID_TRIGGER_DEBUG_LOG = debug_messages
+  CMO_COMBAT_ID_TRIGGER_SNAPSHOT = {
+    export_schema = 'cmo_combat_id_trigger_snapshot_v1',
+    source = 'cmo_triggered_lua',
+    scenario_time = current_time(),
+    key_prefix = keyvalue_prefix,
+    snapshot_index = snapshot_index,
+    record_count = #records,
+    fatal_error = fatal_error,
+    debug_log = debug_messages,
+    records = records,
+  }
+
+  safe_set_key_value(snapshot_count_key, tostring(snapshot_index))
+  safe_set_key_value(snapshot_prefix .. '_record_count', tostring(#records))
+  safe_set_key_value(snapshot_prefix .. '_scenario_time', tostring(CMO_COMBAT_ID_TRIGGER_SNAPSHOT.scenario_time or ''))
+  if fatal_error ~= nil then
+    safe_set_key_value(snapshot_prefix .. '_fatal_error', fatal_error)
+  end
+
+  for index, record in ipairs(records) do
+    local line = record_to_json(record)
+    safe_set_key_value(snapshot_prefix .. '_' .. tostring(index), line)
+    if print_jsonl_to_console then print(line) end
+  end
+
+  safe_set_key_value(snapshot_prefix .. '_debug_count', tostring(#debug_messages))
+  for index, message in ipairs(debug_messages) do
+    safe_set_key_value(snapshot_prefix .. '_debug_' .. tostring(index), message)
+  end
+
+  debug('Triggered snapshot script finished with ' .. tostring(#records) .. ' records under ' .. snapshot_prefix)
+  safe_set_key_value(snapshot_prefix .. '_debug_count', tostring(#debug_messages))
+  safe_set_key_value(snapshot_prefix .. '_debug_' .. tostring(#debug_messages), debug_messages[#debug_messages] or '')
+  print('CMO triggered combat-ID snapshot assigned ' .. tostring(#records) .. ' records to CMO_COMBAT_ID_TRIGGER_RECORDS and key-values under ' .. snapshot_prefix)
 end
 
-print('CMO triggered combat-ID snapshot assigned ' .. tostring(#records) .. ' records to CMO_COMBAT_ID_TRIGGER_RECORDS and key-values under ' .. snapshot_prefix)
+local ok, err = pcall(run_snapshot)
+if not ok then
+  debug('UNEXPECTED ERROR: ' .. tostring(err))
+  CMO_COMBAT_ID_TRIGGER_DEBUG_LOG = debug_messages
+  safe_set_key_value(keyvalue_prefix .. '_last_error', tostring(err))
+  safe_set_key_value(keyvalue_prefix .. '_last_debug_count', tostring(#debug_messages))
+  for index, message in ipairs(debug_messages) do
+    safe_set_key_value(keyvalue_prefix .. '_last_debug_' .. tostring(index), message)
+  end
+  error(err)
+end
