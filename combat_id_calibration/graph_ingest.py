@@ -157,17 +157,33 @@ def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = D
 
 
 def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
-    """Build a constrained prompt for extracting auditable graph triples."""
+    """Build a broad prompt for extracting auditable graph triples."""
 
-    return f"""You extract knowledge-graph facts for a combat-identification evidence graph.
+    return f"""You extract a broad, varied set of knowledge-graph facts for a combat-identification evidence graph.
 Return only valid JSON matching this schema:
 {{"facts":[{{"subject":"entity name","predicate":"RELATION_IN_UPPER_SNAKE_CASE","object":"entity/value","evidence":"short supporting quote or paraphrase","confidence":0.0}}]}}
 
+Extraction goal:
+- Capture as much source-supported context as practical from this chunk, not just one headline fact.
+- Prefer many small, specific facts over a single generic summary fact.
+- Aim for 8-20 diverse facts when the chunk contains enough information; return fewer only when the source chunk is sparse.
+
+Include varied fact types where supported:
+- Entity taxonomy and aliases: IS_A, ALSO_KNOWN_AS, VARIANT_OF, PART_OF.
+- Platform, sensor, emitter, weapon, subsystem, signature, and track characteristics: HAS_SENSOR, HAS_WEAPON, HAS_SUBSYSTEM, EMITS, DETECTS, HAS_SIGNATURE, HAS_TRACK_FEATURE.
+- Operators, manufacturers, organizations, roles, missions, doctrine, and tactics: OPERATED_BY, MANUFACTURED_BY, HAS_ROLE, HAS_MISSION, USES_DOCTRINE, USES_TACTIC.
+- Capabilities, limitations, performance, ranges, frequencies, modes, datalinks, and interoperability: HAS_CAPABILITY, HAS_LIMITATION, HAS_RANGE, USES_FREQUENCY, HAS_MODE, USES_DATALINK, INTEROPERATES_WITH.
+- Geography, basing, deployment, timeline, conflicts, exercises, and operational context: LOCATED_IN, BASED_AT, DEPLOYED_TO, ENTERED_SERVICE, RETIRED_FROM_SERVICE, USED_IN, PARTICIPATED_IN.
+- Identification evidence and caveats: SUPPORTS_IDENTIFICATION, CONTRADICTS_IDENTIFICATION, DISTINGUISHES_FROM, INDICATES, DERIVED_FROM.
+- Quantitative values and named attributes that help disambiguate entities.
+
 Rules:
-- Extract factual relationships useful for identifying platforms, sensors, emitters, weapons, military organizations, roles, capabilities, locations, or doctrine.
-- Use concise canonical entity names.
-- Use predicates such as IS_A, HAS_SENSOR, HAS_WEAPON, OPERATED_BY, DETECTS, EMITS, LOCATED_IN, SUPPORTS_IDENTIFICATION, CONTRADICTS_IDENTIFICATION, HAS_ROLE, HAS_CAPABILITY, DERIVED_FROM.
+- Extract factual relationships useful for identifying platforms, sensors, emitters, weapons, military organizations, roles, capabilities, locations, doctrine, operational history, and discriminating context.
+- Cover different subjects mentioned in the chunk instead of repeatedly describing only the first or most prominent subject.
+- Use concise canonical entity names and preserve meaningful model numbers, designations, frequencies, ranges, dates, units, and locations.
+- Use upper snake case predicates; prefer the predicates above, but create similarly specific predicates when needed.
 - Do not invent facts not supported by the source chunk.
+- Do not emit duplicate facts or vague facts whose object is only "information", "context", or "data".
 - Use confidence from 0.0 to 1.0 based only on how explicit the source chunk is.
 
 Source title: {document.title}
