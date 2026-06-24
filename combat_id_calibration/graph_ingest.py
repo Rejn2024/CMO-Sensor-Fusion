@@ -317,6 +317,20 @@ def _write_fact(tx: object, fact: ExtractedFact) -> None:
     )
 
 
+def _validate_neo4j_credentials(user: str | None, password: str | None) -> tuple[str, str]:
+    """Validate Neo4j credentials before building the driver auth token."""
+
+    username = "" if user is None else str(user).strip()
+    if not username:
+        raise ValueError("Neo4j username is required; set --neo4j-user or NEO4J_USER before ingestion.")
+    if password is None or not str(password):
+        raise ValueError(
+            "Neo4j password is required; set --neo4j-password or NEO4J_PASSWORD before ingestion. "
+            "In the notebook, replace the placeholder empty string with your Neo4j password."
+        )
+    return username, str(password)
+
+
 def _neo4j_connection_error_message(uri: str, database: str | None = None) -> str:
     """Build actionable guidance for Neo4j connection failures."""
 
@@ -340,6 +354,7 @@ def populate_neo4j(
 ) -> None:
     """Populate a Neo4j database with extracted facts."""
 
+    user, password = _validate_neo4j_credentials(user, password)
     neo4j = importlib.import_module("neo4j")
     service_unavailable = neo4j.exceptions.ServiceUnavailable
     auth_error = neo4j.exceptions.AuthError
