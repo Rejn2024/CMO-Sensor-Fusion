@@ -18,7 +18,7 @@
 -- Python script extract_cmo_combat_id_dataset.py converts those JSONL snapshots into
 -- train/validation/test splits for the combat ID training pathway.
 
-local output_path = CMO_COMBAT_ID_EXPORT or 'cmo_combat_id_export.jsonl'
+local output_path = CMO_COMBAT_ID_EXPORT or 'C:/Users/theon/CMO-Sensor-Fusion/CMO_Data_Exports/scenario_001_t0000.jsonl'
 local keyvalue_prefix = CMO_COMBAT_ID_KEY_PREFIX or 'CMO_COMBAT_ID_EXPORT'
 local script_path = CMO_COMBAT_ID_SCRIPT_PATH or 'cmo_scenario_export.lua'
 local auto_event_enabled = CMO_COMBAT_ID_AUTO_EVENT ~= false

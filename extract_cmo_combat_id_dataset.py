@@ -24,8 +24,9 @@ import hashlib
 import json
 import math
 import random
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from extract_cmo_jsonl_from_log import extract_log_file
+from pathlib import Path
 
 UNKNOWN_TOKEN = "unknown"
 DEFAULT_LABEL_PRIORITY = ("posture", "actual_side", "side")
@@ -245,32 +246,79 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--drop-unknown-labels", action="store_true")
     return parser
 
-
-def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
-    args = build_parser().parse_args(argv)
-    input_paths = [Path(path) for path in args.input]
-    label_fields = tuple(args.label_fields or DEFAULT_LABEL_PRIORITY)
-
+def build_manifest(input_paths: List[Path],
+                   label_fields: Sequence[str],
+                   output_root: str,
+                   train_fraction: float,
+                   val_fraction: float,
+                   seed:int,
+                   drop_unknown_labels: bool,
+                   ) ->  dict[str, Any]:
     examples = [
         build_example(record, source_path=source_path, line_number=line_number, label_fields=label_fields)
         for source_path, line_number, record in load_records(input_paths)
     ]
-    if args.drop_unknown_labels:
+    if drop_unknown_labels:
         examples = [example for example in examples if example["label"] != UNKNOWN_TOKEN]
     if not examples:
         raise ValueError("No examples found after loading CMO exports")
 
     manifest = write_dataset(
         examples,
-        output_root=Path(args.output_root),
-        train_fraction=args.train_fraction,
-        val_fraction=args.val_fraction,
-        seed=args.seed,
+        output_root=Path(output_root),
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
+        seed=seed,
         input_paths=input_paths,
         label_fields=label_fields,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return manifest
+
+
+def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    args = build_parser().parse_args(argv)
+    input_paths = [Path(path) for path in args.input]
+    label_fields = tuple(args.label_fields or DEFAULT_LABEL_PRIORITY)
+
+    manifest = build_manifest(input_paths=input_paths,
+                   label_fields=label_fields,
+                    output_root=args.output_root,
+                    train_fraction=args.train_fraction,
+                    val_fraction=args.val_fraction,
+                    seed=args.seed,
+                    drop_unknown_labels=args.drop_unknown_labels)
+
+    return manifest
+
+
+
+
+
+def extract_from_log_file(input_paths: List[Path],
+                          jsonl_output_paths: List[Path],
+                          output_root: str,
+                          train_fraction: float,
+                          val_fraction: float,
+                          drop_unknown_labels: bool,
+                          seed: int = 0,
+                          label_fields: Sequence[str] = ("posture", "actual_side", "side")
+                          ):
+
+    for input_path, jsonl_output_path in zip(input_paths, jsonl_output_paths):
+        extract_log_file(input_path=input_path, output_path=jsonl_output_path)
+
+    manifest = build_manifest(input_paths=jsonl_output_paths,
+                    label_fields=label_fields,
+                    output_root=output_root,
+                    train_fraction=train_fraction,
+                    val_fraction=val_fraction,
+                    seed=seed,
+                    drop_unknown_labels=drop_unknown_labels
+                    )
+
+    return manifest
+
 
 
 if __name__ == "__main__":
