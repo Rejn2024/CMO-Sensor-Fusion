@@ -5,6 +5,7 @@ import pytest
 from combat_id_calibration.graph_ingest import (
     ExtractedFact,
     SourceDocument,
+    _neo4j_connection_error_message,
     _write_fact,
     chunk_text,
     create_neo4j_schema,
@@ -125,3 +126,12 @@ def test_write_fact_emits_parameterized_neo4j_cypher():
     assert parameters["object"] == "N019 radar"
     assert parameters["predicate"] == "HAS_SENSOR"
     assert parameters["confidence"] == 0.9
+
+
+def test_neo4j_connection_error_message_is_actionable():
+    message = _neo4j_connection_error_message("bolt://localhost:7687", "neo4j")
+    assert "Unable to connect to Neo4j" in message
+    assert "bolt://localhost:7687" in message
+    assert "docker run" in message
+    assert "bolt://127.0.0.1:7687" in message
+

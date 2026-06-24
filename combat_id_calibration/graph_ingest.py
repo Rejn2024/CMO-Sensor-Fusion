@@ -300,6 +300,20 @@ def _write_fact(tx: object, fact: ExtractedFact) -> None:
     )
 
 
+def _neo4j_connection_error_message(uri: str, database: str | None = None) -> str:
+    """Build actionable guidance for Neo4j connection failures."""
+
+    database_text = f" database {database!r}" if database else ""
+    return (
+        f"Unable to connect to Neo4j at {uri!r}{database_text}. "
+        "Make sure a Neo4j server is running and reachable over Bolt, the URI/port are correct, "
+        "and your username/password match the configured database. For a local default setup, "
+        "start Neo4j Desktop or run `docker run --rm -p 7474:7474 -p 7687:7687 "
+        "-e NEO4J_AUTH=neo4j/<password> neo4j:latest`, then retry with "
+        "`bolt://127.0.0.1:7687` if `localhost` resolves incorrectly."
+    )
+
+
 def populate_neo4j(
     facts: Sequence[ExtractedFact],
     uri: str,
@@ -310,13 +324,24 @@ def populate_neo4j(
     """Populate a Neo4j database with extracted facts."""
 
     neo4j = importlib.import_module("neo4j")
+    service_unavailable = neo4j.exceptions.ServiceUnavailable
+    auth_error = neo4j.exceptions.AuthError
     driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
     try:
-        session_kwargs = {"database": database} if database else {}
-        with driver.session(**session_kwargs) as session:
-            create_neo4j_schema(session)
-            for fact in facts:
-                session.execute_write(_write_fact, fact)
+        try:
+            driver.verify_connectivity()
+            session_kwargs = {"database": database} if database else {}
+            with driver.session(**session_kwargs) as session:
+                create_neo4j_schema(session)
+                for fact in facts:
+                    session.execute_write(_write_fact, fact)
+        except service_unavailable as error:
+            raise RuntimeError(_neo4j_connection_error_message(uri, database)) from error
+        except auth_error as error:
+            raise RuntimeError(
+                f"Neo4j rejected the credentials for {uri!r}. Check the --neo4j-user/--neo4j-password "
+                "values or reset the database password, then retry ingestion."
+            ) from error
     finally:
         driver.close()
 
