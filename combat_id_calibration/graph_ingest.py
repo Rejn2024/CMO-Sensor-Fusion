@@ -144,7 +144,7 @@ def read_wikipedia(url: str) -> SourceDocument:
 def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = DEFAULT_OLLAMA_URL) -> str:
     """Call Ollama's local generation API and return the raw response text."""
 
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json"}).encode("utf-8")
     request = urllib.request.Request(
         f"{ollama_url.rstrip('/')}/api/generate",
         data=payload,
@@ -195,26 +195,59 @@ Text chunk:
 """
 
 
+def _json_object_candidates(text: str) -> Iterable[str]:
+    """Yield balanced top-level JSON object candidates embedded in text."""
+
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                yield text[start : index + 1]
+                start = None
+
+
 def _extract_json_object(response: str) -> dict[str, object]:
-    """Return the first JSON object from an LLM response, or an empty payload."""
+    """Return the first facts JSON object from an LLM response, or an empty payload."""
 
     text = response.strip()
     if not text:
         return {"facts": []}
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         text = fenced.group(1).strip()
-    if not text.startswith("{"):
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            text = text[start : end + 1]
-        else:
-            return {"facts": []}
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return {"facts": []}
-    return payload if isinstance(payload, dict) else {"facts": []}
+
+    fallback: dict[str, object] | None = None
+    for candidate in _json_object_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if "facts" in payload:
+            return payload
+        if fallback is None:
+            fallback = payload
+    return fallback or {"facts": []}
 
 
 def parse_extracted_facts(response: str, document: SourceDocument) -> list[ExtractedFact]:
