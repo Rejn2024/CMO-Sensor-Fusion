@@ -7,6 +7,7 @@ from combat_id_calibration.graph_ingest import (
     SourceDocument,
     _neo4j_connection_error_message,
     _write_fact,
+    build_extraction_prompt,
     chunk_text,
     create_neo4j_schema,
     parse_extracted_facts,
@@ -22,6 +23,23 @@ def test_chunk_text_uses_overlap():
 def test_chunk_text_rejects_invalid_overlap():
     with pytest.raises(ValueError, match="max_chars"):
         chunk_text("abc", max_chars=5, overlap=5)
+
+
+def test_build_extraction_prompt_requests_broad_varied_context():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "prompt"),
+        source_type="pdf",
+        locator="prompt.pdf",
+        title="Prompt",
+        text="",
+    )
+    prompt = build_extraction_prompt(document, "The MiG-29 uses N019 radar and R-27 missiles.")
+
+    assert "broad, varied set" in prompt
+    assert "Aim for 8-20 diverse facts" in prompt
+    assert "Cover different subjects" in prompt
+    assert "HAS_RANGE" in prompt
+    assert "DISTINGUISHES_FROM" in prompt
 
 
 def test_parse_extracted_facts_normalizes_model_json():
