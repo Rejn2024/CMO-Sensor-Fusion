@@ -54,6 +54,11 @@ Pipeline stages and requirements:
 4. **Kuzu population:** the pipeline creates a minimal property-graph schema and writes entities, sources, fact edges, provenance, evidence text, and extraction confidence.
 5. **Downstream calibration:** graph queries over this Kuzu database should produce candidate features or logits that conform to the `scores` input contract below; the graph extraction step is not a substitute for calibration against CMO truth labels.
 
+
+### Wikipedia Kuzu knowledge graph notebook
+
+A companion notebook, [`notebooks/wikipedia_airborne_radars_kuzu_kg.ipynb`](notebooks/wikipedia_airborne_radars_kuzu_kg.ipynb), builds a local Kuzu knowledge graph from Wikipedia articles for the MiG-29, the Ukrainian Air Force, the Russian Air Force, the N011M Bars radar, and representative Russian and Israeli airborne radars. It reuses the repository's `combat_id_calibration.graph_ingest` module to fetch Wikipedia pages, extract auditable facts with local Ollama, write a review JSONL file, and populate the standard `Entity`, `Source`, `FACT`, and `MENTIONED_IN` Kuzu schema.
+
 ## Usage
 
 The dependency-free package implements multiclass temperature scaling. This method preserves the graph model's candidate ranking while correcting global over/under-confidence by minimizing held-out negative log loss.
