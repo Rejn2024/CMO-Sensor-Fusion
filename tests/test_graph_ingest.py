@@ -72,6 +72,48 @@ def test_parse_extracted_facts_normalizes_model_json():
     assert facts[0].source_id == document.source_id
 
 
+def test_parse_extracted_facts_skips_reasoning_json_before_answer():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "reasoning"),
+        source_type="pdf",
+        locator="reasoning.pdf",
+        title="Reasoning",
+        text="",
+    )
+    response = (
+        '<think>The prompt schema looks like {"facts": []}, but the chunk supports facts.</think>\n'
+        '{"facts": [{"subject": "MiG-29", "predicate": "HAS_SENSOR", '
+        '"object": "N019 radar", "confidence": 0.9}]}'
+    )
+
+    facts = parse_extracted_facts(response, document)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "MiG-29"
+    assert facts[0].object == "N019 radar"
+
+
+def test_parse_extracted_facts_uses_later_facts_object_after_embedded_json():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "embedded"),
+        source_type="pdf",
+        locator="embedded.pdf",
+        title="Embedded",
+        text="",
+    )
+    response = (
+        'I will use the requested schema {"example": "not the answer"}.\n'
+        '{"facts": [{"subject": "R-27", "predicate": "IS_A", '
+        '"object": "missile", "confidence": 1.0}]}'
+    )
+
+    facts = parse_extracted_facts(response, document)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "R-27"
+    assert facts[0].predicate == "IS_A"
+
+
 def test_parse_extracted_facts_ignores_empty_model_response():
     document = SourceDocument(
         source_id=stable_id("pdf", "empty"),
