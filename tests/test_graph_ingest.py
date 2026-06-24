@@ -52,6 +52,39 @@ def test_parse_extracted_facts_normalizes_model_json():
     assert facts[0].source_id == document.source_id
 
 
+def test_parse_extracted_facts_ignores_empty_model_response():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "empty"),
+        source_type="pdf",
+        locator="empty.pdf",
+        title="Empty",
+        text="",
+    )
+    assert parse_extracted_facts("", document) == []
+
+
+def test_parse_extracted_facts_ignores_non_json_model_response():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "non-json"),
+        source_type="pdf",
+        locator="non-json.pdf",
+        title="Non JSON",
+        text="",
+    )
+    assert parse_extracted_facts("I could not find any supported facts.", document) == []
+
+
+def test_parse_extracted_facts_ignores_malformed_json_model_response():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "malformed"),
+        source_type="pdf",
+        locator="malformed.pdf",
+        title="Malformed",
+        text="",
+    )
+    assert parse_extracted_facts('{"facts": [', document) == []
+
+
 class RecordingRunner:
     def __init__(self):
         self.calls = []

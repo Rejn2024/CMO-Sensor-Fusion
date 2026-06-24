@@ -178,10 +178,12 @@ Text chunk:
 """
 
 
-def parse_extracted_facts(response: str, document: SourceDocument) -> list[ExtractedFact]:
-    """Parse the model's JSON response and normalize fact records."""
+def _extract_json_object(response: str) -> dict[str, object]:
+    """Return the first JSON object from an LLM response, or an empty payload."""
 
     text = response.strip()
+    if not text:
+        return {"facts": []}
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         text = fenced.group(1).strip()
@@ -189,9 +191,23 @@ def parse_extracted_facts(response: str, document: SourceDocument) -> list[Extra
         start, end = text.find("{"), text.rfind("}")
         if start >= 0 and end > start:
             text = text[start : end + 1]
-    payload = json.loads(text)
+        else:
+            return {"facts": []}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"facts": []}
+    return payload if isinstance(payload, dict) else {"facts": []}
+
+
+def parse_extracted_facts(response: str, document: SourceDocument) -> list[ExtractedFact]:
+    """Parse the model's JSON response and normalize fact records."""
+
+    payload = _extract_json_object(response)
     facts: list[ExtractedFact] = []
     for item in payload.get("facts", []):
+        if not isinstance(item, dict):
+            continue
         subject = str(item.get("subject", "")).strip()
         predicate = re.sub(r"[^A-Z0-9_]+", "_", str(item.get("predicate", "RELATED_TO")).upper()).strip("_") or "RELATED_TO"
         obj = str(item.get("object", "")).strip()
