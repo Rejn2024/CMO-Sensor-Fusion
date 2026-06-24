@@ -1,8 +1,8 @@
-"""Populate a Kuzu knowledge graph from PDFs and Wikipedia pages via Ollama.
+"""Populate a Neo4j knowledge graph from PDFs and Wikipedia pages via Ollama.
 
 The pipeline is intentionally dependency-light at import time. Runtime ingestion
 requires a local Ollama server and optional packages for the selected sources and
-sink: ``pypdf`` for PDFs and ``kuzu`` for writing the graph database.
+sink: ``pypdf`` for PDFs and ``neo4j`` for writing the graph database.
 Wikipedia/HTTP page fetching uses the Python standard library.
 """
 
@@ -37,7 +37,7 @@ class SourceDocument:
 
 @dataclass(frozen=True)
 class ExtractedFact:
-    """A normalized entity-relationship fact ready for Kuzu insertion."""
+    """A normalized entity-relationship fact ready for Neo4j insertion."""
 
     subject: str
     predicate: str
@@ -237,55 +237,72 @@ def write_facts_jsonl(facts: Sequence[ExtractedFact], path: str | Path) -> None:
     Path(path).write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
-def create_kuzu_schema(connection: object) -> None:
-    """Create the minimal Kuzu schema used by this pipeline."""
+def create_neo4j_schema(session: object) -> None:
+    """Create the minimal Neo4j constraints used by this pipeline."""
 
     statements = [
-        "CREATE NODE TABLE IF NOT EXISTS Entity(id STRING, name STRING, PRIMARY KEY(id))",
-        "CREATE NODE TABLE IF NOT EXISTS Source(id STRING, source_type STRING, locator STRING, PRIMARY KEY(id))",
-        "CREATE REL TABLE IF NOT EXISTS FACT(FROM Entity TO Entity, predicate STRING, source_id STRING, evidence STRING, confidence DOUBLE)",
-        "CREATE REL TABLE IF NOT EXISTS MENTIONED_IN(FROM Entity TO Source)",
+        "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
+        "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
     ]
     for statement in statements:
-        connection.execute(statement)
+        session.run(statement)
 
 
-def populate_kuzu(facts: Sequence[ExtractedFact], db_path: str | Path) -> None:
-    """Populate a Kuzu database with extracted facts."""
+def _write_fact(tx: object, fact: ExtractedFact) -> None:
+    """Write one extracted fact to Neo4j inside a transaction."""
 
-    kuzu = importlib.import_module("kuzu")
-    database = kuzu.Database(str(db_path))
-    connection = kuzu.Connection(database)
-    create_kuzu_schema(connection)
-    for fact in facts:
-        subject_id = stable_id("entity", fact.subject.lower())
-        object_id = stable_id("entity", fact.object.lower())
-        connection.execute("MERGE (e:Entity {id: $id}) SET e.name = $name", {"id": subject_id, "name": fact.subject})
-        connection.execute("MERGE (e:Entity {id: $id}) SET e.name = $name", {"id": object_id, "name": fact.object})
-        connection.execute(
-            "MERGE (s:Source {id: $id}) SET s.source_type = $source_type, s.locator = $locator",
-            {"id": fact.source_id, "source_type": fact.source_type, "locator": fact.locator},
-        )
-        connection.execute(
-            "MATCH (a:Entity {id: $subject_id}), (b:Entity {id: $object_id}) "
-            "CREATE (a)-[:FACT {predicate: $predicate, source_id: $source_id, evidence: $evidence, confidence: $confidence}]->(b)",
-            {
-                "subject_id": subject_id,
-                "object_id": object_id,
-                "predicate": fact.predicate,
-                "source_id": fact.source_id,
-                "evidence": fact.evidence,
-                "confidence": fact.confidence,
-            },
-        )
-        connection.execute(
-            "MATCH (e:Entity {id: $entity_id}), (s:Source {id: $source_id}) MERGE (e)-[:MENTIONED_IN]->(s)",
-            {"entity_id": subject_id, "source_id": fact.source_id},
-        )
-        connection.execute(
-            "MATCH (e:Entity {id: $entity_id}), (s:Source {id: $source_id}) MERGE (e)-[:MENTIONED_IN]->(s)",
-            {"entity_id": object_id, "source_id": fact.source_id},
-        )
+    subject_id = stable_id("entity", fact.subject.lower())
+    object_id = stable_id("entity", fact.object.lower())
+    tx.run(
+        """
+        MERGE (subject:Entity {id: $subject_id})
+          SET subject.name = $subject
+        MERGE (object:Entity {id: $object_id})
+          SET object.name = $object
+        MERGE (source:Source {id: $source_id})
+          SET source.source_type = $source_type,
+              source.locator = $locator
+        CREATE (subject)-[:FACT {
+            predicate: $predicate,
+            source_id: $source_id,
+            evidence: $evidence,
+            confidence: $confidence
+        }]->(object)
+        MERGE (subject)-[:MENTIONED_IN]->(source)
+        MERGE (object)-[:MENTIONED_IN]->(source)
+        """,
+        subject_id=subject_id,
+        object_id=object_id,
+        subject=fact.subject,
+        object=fact.object,
+        source_id=fact.source_id,
+        source_type=fact.source_type,
+        locator=fact.locator,
+        predicate=fact.predicate,
+        evidence=fact.evidence,
+        confidence=fact.confidence,
+    )
+
+
+def populate_neo4j(
+    facts: Sequence[ExtractedFact],
+    uri: str,
+    user: str,
+    password: str,
+    database: str | None = None,
+) -> None:
+    """Populate a Neo4j database with extracted facts."""
+
+    neo4j = importlib.import_module("neo4j")
+    driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        session_kwargs = {"database": database} if database else {}
+        with driver.session(**session_kwargs) as session:
+            create_neo4j_schema(session)
+            for fact in facts:
+                session.execute_write(_write_fact, fact)
+    finally:
+        driver.close()
 
 
 def load_documents(pdf_paths: Sequence[str], wikipedia_urls: Sequence[str]) -> list[SourceDocument]:
@@ -297,10 +314,13 @@ def load_documents(pdf_paths: Sequence[str], wikipedia_urls: Sequence[str]) -> l
 def add_ingest_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the graph-ingestion CLI command."""
 
-    parser = commands.add_parser("ingest-graph", help="extract facts with local Ollama and populate a Kuzu graph")
+    parser = commands.add_parser("ingest-graph", help="extract facts with local Ollama and populate a Neo4j graph")
     parser.add_argument("--pdf", action="append", default=[], help="PDF path to ingest; may be repeated")
     parser.add_argument("--wikipedia", action="append", default=[], help="Wikipedia page URL to ingest; may be repeated")
-    parser.add_argument("--db", required=True, help="Kuzu database directory")
+    parser.add_argument("--neo4j-uri", default="bolt://localhost:7687", help="Neo4j Bolt URI")
+    parser.add_argument("--neo4j-user", default="neo4j", help="Neo4j username")
+    parser.add_argument("--neo4j-password", required=True, help="Neo4j password")
+    parser.add_argument("--neo4j-database", help="optional Neo4j database name")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="local Ollama model name")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Ollama base URL")
     parser.add_argument("--facts-jsonl", help="optional JSONL file for extracted facts")
@@ -317,5 +337,5 @@ def run_ingest_command(args: argparse.Namespace) -> None:
     facts = extract_facts(documents, model=args.model, ollama_url=args.ollama_url, max_chars=args.max_chars, overlap=args.overlap)
     if args.facts_jsonl:
         write_facts_jsonl(facts, args.facts_jsonl)
-    populate_kuzu(facts, args.db)
-    print(json.dumps({"documents": len(documents), "facts": len(facts), "db": args.db}, indent=2))
+    populate_neo4j(facts, args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database)
+    print(json.dumps({"documents": len(documents), "facts": len(facts), "neo4j_uri": args.neo4j_uri, "neo4j_database": args.neo4j_database}, indent=2))
