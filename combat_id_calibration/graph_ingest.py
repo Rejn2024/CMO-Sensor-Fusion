@@ -109,6 +109,7 @@ def read_pdf(path: str | Path) -> SourceDocument:
 
     pypdf = importlib.import_module("pypdf")
     pdf_path = Path(path)
+    print(path)
     reader = pypdf.PdfReader(str(pdf_path))
     pages = [page.extract_text() or "" for page in reader.pages]
     text = "\n\n".join(pages)
@@ -123,7 +124,7 @@ def read_pdf(path: str | Path) -> SourceDocument:
 
 def read_wikipedia(url: str) -> SourceDocument:
     """Fetch and extract readable text from a Wikipedia page URL."""
-
+    print(url)
     request = urllib.request.Request(url, headers={"User-Agent": "CMO-Sensor-Fusion/0.1 graph-ingest"})
     with urllib.request.urlopen(request, timeout=30) as response:
         html = response.read().decode("utf-8", errors="replace")
