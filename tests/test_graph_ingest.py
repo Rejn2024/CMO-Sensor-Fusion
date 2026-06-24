@@ -2,7 +2,15 @@ import json
 
 import pytest
 
-from combat_id_calibration.graph_ingest import SourceDocument, chunk_text, parse_extracted_facts, stable_id
+from combat_id_calibration.graph_ingest import (
+    ExtractedFact,
+    SourceDocument,
+    _write_fact,
+    chunk_text,
+    create_neo4j_schema,
+    parse_extracted_facts,
+    stable_id,
+)
 
 
 def test_chunk_text_uses_overlap():
@@ -42,3 +50,45 @@ def test_parse_extracted_facts_normalizes_model_json():
     assert facts[0].predicate == "DETECTS_AIRCRAFT"
     assert facts[0].confidence == 1.0
     assert facts[0].source_id == document.source_id
+
+
+class RecordingRunner:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, statement, **parameters):
+        self.calls.append((statement, parameters))
+
+
+def test_create_neo4j_schema_uses_unique_constraints():
+    session = RecordingRunner()
+    create_neo4j_schema(session)
+    statements = [call[0] for call in session.calls]
+    assert statements == [
+        "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
+        "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
+    ]
+
+
+def test_write_fact_emits_parameterized_neo4j_cypher():
+    tx = RecordingRunner()
+    fact = ExtractedFact(
+        subject="MiG-29",
+        predicate="HAS_SENSOR",
+        object="N019 radar",
+        source_id="source-1",
+        source_type="wikipedia",
+        locator="https://example.test/wiki/MiG-29",
+        evidence="MiG-29 uses the N019 radar.",
+        confidence=0.9,
+    )
+    _write_fact(tx, fact)
+    assert len(tx.calls) == 1
+    statement, parameters = tx.calls[0]
+    assert "MERGE (subject:Entity" in statement
+    assert "CREATE (subject)-[:FACT" in statement
+    assert "MERGE (object)-[:MENTIONED_IN]->(source)" in statement
+    assert parameters["subject"] == "MiG-29"
+    assert parameters["object"] == "N019 radar"
+    assert parameters["predicate"] == "HAS_SENSOR"
+    assert parameters["confidence"] == 0.9

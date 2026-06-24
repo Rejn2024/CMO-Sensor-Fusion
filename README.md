@@ -20,21 +20,20 @@ Candidate keys must be identical across a dataset. Fit and evaluate on scenario-
 
 ## Recommended graph database package
 
-Use **Kuzu** (`kuzu` Python package) as the default Graph DB for this project. It is a good fit because this repository currently expects an offline/simulation pipeline: CMO exports observations, Python transforms them, graph queries produce evidence-derived candidate logits, and the local calibrator turns those logits into calibrated probabilities. An embedded property-graph database keeps that workflow reproducible without requiring a separate graph server for each experiment.
+Use **Neo4j** with the official `neo4j` Python driver as the default Graph DB for this project. It is a good fit because this repository now targets a long-running, inspectable graph service for CMO evidence: CMO exports observations, Python transforms them, Neo4j Cypher queries produce evidence-derived candidate logits, and the local calibrator turns those logits into calibrated probabilities. Neo4j also supports browser-based operational exploration, managed hosting, role-based access control, and integration with Neo4j Graph Data Science while preserving the repository's database-agnostic calibration contract.
 
-Recommended requirements for using Kuzu here:
+Recommended requirements for using Neo4j here:
 
-- **Runtime:** keep the existing Python 3.10+ baseline and install the optional graph extras in the environment that performs graph ingestion and evidence queries: `python -m pip install -e .[graph]`. Run Ollama locally with `qwen3.5:9b` available, for example `ollama pull qwen3.5:9b` and `ollama serve`.
+- **Runtime:** keep the existing Python 3.10+ baseline and install the optional graph extras in the environment that performs graph ingestion and evidence queries: `python -m pip install -e .[graph]`. Run a Neo4j server reachable over Bolt, and run Ollama locally with `qwen3.5:9b` available, for example `ollama pull qwen3.5:9b` and `ollama serve`.
 - **Data model:** represent CMO entities as typed nodes, such as scenarios, contacts, observations, platforms, sensors, emitters, tracks, evidence sources, and candidate identities. Represent evidence as typed relationships, such as `OBSERVED_BY`, `EMITTED`, `CLASSIFIED_AS`, `SUPPORTS`, `CONTRADICTS`, `NEAR`, and `DERIVED_FROM`.
 - **Auditability:** persist `scenario_id`, `contact_id`, `observation_time`, `evidence_query_id`, source reliability, recency, sensor mix, and graph/schema version on nodes or relationships so every calibrated estimate can be traced back to the CMO run and graph query that produced it.
 - **Query output contract:** graph queries should not output final probabilities. They should output deterministic, auditable features or logits per candidate, including support score, contradiction score, independent path count, path lengths, source quality, recency, and sensor/track quality. Those values map into the `scores` contract consumed by this package.
 - **Calibration discipline:** refit and version the calibration model whenever the graph schema, evidence extraction queries, feature/logit construction, scenario population, or candidate taxonomy changes. Fit and evaluate on scenario-disjoint datasets.
-- **When to choose Neo4j instead:** use Neo4j plus the official Python driver if the work needs a long-running multi-user graph service, browser-based operational exploration, managed hosting, role-based access control, or integration with Neo4j Graph Data Science. In that case, keep the same feature/logit output contract so the calibration layer remains database-agnostic.
 
 
-### Ollama-to-Kuzu ingestion pipeline
+### Ollama-to-Neo4j ingestion pipeline
 
-The `ingest-graph` command extracts source text from local PDFs and Wikipedia pages, chunks the text, asks the local Ollama model to return strict JSON facts, optionally writes those facts to JSONL for review, and populates a Kuzu graph with `Entity`, `Source`, `FACT`, and `MENTIONED_IN` records.
+The `ingest-graph` command extracts source text from local PDFs and Wikipedia pages, chunks the text, asks the local Ollama model to return strict JSON facts, optionally writes those facts to JSONL for review, and populates a Neo4j graph with `Entity`, `Source`, `FACT`, and `MENTIONED_IN` records.
 
 ```bash
 python -m combat_id_calibration ingest-graph \
@@ -43,7 +42,9 @@ python -m combat_id_calibration ingest-graph \
   --pdf 34_A_Holistic_Approach_to_Combat_Identification_200701.pdf \
   --wikipedia https://en.wikipedia.org/wiki/Identification_friend_or_foe \
   --facts-jsonl extracted-facts.jsonl \
-  --db cmo-evidence.kuzu
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-password "$NEO4J_PASSWORD"
 ```
 
 Pipeline stages and requirements:
@@ -51,13 +52,13 @@ Pipeline stages and requirements:
 1. **Source loading:** PDF ingestion uses `pypdf`; Wikipedia ingestion uses the standard-library HTTP and HTML parsers.
 2. **LLM extraction:** the command calls Ollama's local `/api/generate` endpoint and defaults to `qwen3.5:9b`; extracted facts are constrained to JSON triples with evidence snippets and confidence values.
 3. **Human/audit review:** use `--facts-jsonl` to inspect extracted facts before relying on the graph.
-4. **Kuzu population:** the pipeline creates a minimal property-graph schema and writes entities, sources, fact edges, provenance, evidence text, and extraction confidence.
-5. **Downstream calibration:** graph queries over this Kuzu database should produce candidate features or logits that conform to the `scores` input contract below; the graph extraction step is not a substitute for calibration against CMO truth labels.
+4. **Neo4j population:** the pipeline creates uniqueness constraints and writes entities, sources, fact edges, provenance, evidence text, and extraction confidence.
+5. **Downstream calibration:** Cypher queries over this Neo4j database should produce candidate features or logits that conform to the `scores` input contract below; the graph extraction step is not a substitute for calibration against CMO truth labels.
 
 
-### Wikipedia Kuzu knowledge graph notebook
+### Wikipedia Neo4j knowledge graph notebook
 
-A companion notebook, [`notebooks/wikipedia_airborne_radars_kuzu_kg.ipynb`](notebooks/wikipedia_airborne_radars_kuzu_kg.ipynb), builds a local Kuzu knowledge graph from Wikipedia articles for the MiG-29, the Ukrainian Air Force, the Russian Air Force, the N011M Bars radar, and representative Russian and Israeli airborne radars. It reuses the repository's `combat_id_calibration.graph_ingest` module to fetch Wikipedia pages, extract auditable facts with local Ollama, write a review JSONL file, and populate the standard `Entity`, `Source`, `FACT`, and `MENTIONED_IN` Kuzu schema.
+A companion notebook, [`notebooks/wikipedia_airborne_radars_neo4j_kg.ipynb`](notebooks/wikipedia_airborne_radars_neo4j_kg.ipynb), builds a local Neo4j knowledge graph from Wikipedia articles for the MiG-29, the Ukrainian Air Force, the Russian Air Force, the N011M Bars radar, and representative Russian and Israeli airborne radars. It reuses the repository's `combat_id_calibration.graph_ingest` module to fetch Wikipedia pages, extract auditable facts with local Ollama, write a review JSONL file, and populate the standard `Entity`, `Source`, `FACT`, and `MENTIONED_IN` Neo4j schema.
 
 ## Usage
 
