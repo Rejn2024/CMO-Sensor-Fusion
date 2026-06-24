@@ -6,6 +6,7 @@ from combat_id_calibration.graph_ingest import (
     ExtractedFact,
     SourceDocument,
     _neo4j_connection_error_message,
+    _validate_neo4j_credentials,
     _write_fact,
     build_extraction_prompt,
     chunk_text,
@@ -153,3 +154,19 @@ def test_neo4j_connection_error_message_is_actionable():
     assert "docker run" in message
     assert "bolt://127.0.0.1:7687" in message
 
+
+def test_validate_neo4j_credentials_rejects_missing_password():
+    with pytest.raises(ValueError, match="Neo4j password is required"):
+        _validate_neo4j_credentials("neo4j", "")
+
+    with pytest.raises(ValueError, match="Neo4j password is required"):
+        _validate_neo4j_credentials("neo4j", None)
+
+
+def test_validate_neo4j_credentials_rejects_missing_user():
+    with pytest.raises(ValueError, match="Neo4j username is required"):
+        _validate_neo4j_credentials("", "secret")
+
+
+def test_validate_neo4j_credentials_accepts_values():
+    assert _validate_neo4j_credentials(" neo4j ", "secret") == ("neo4j", "secret")
