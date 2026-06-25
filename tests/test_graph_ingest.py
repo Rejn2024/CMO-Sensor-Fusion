@@ -6,6 +6,7 @@ from combat_id_calibration.graph_ingest import (
     ExtractedFact,
     SourceDocument,
     _neo4j_connection_error_message,
+    _ollama_response_text,
     _validate_neo4j_credentials,
     _write_fact,
     build_extraction_prompt,
@@ -16,6 +17,20 @@ from combat_id_calibration.graph_ingest import (
     stable_id,
 )
 
+
+def test_ollama_response_text_prefers_response_field():
+    data = {"response": '{"facts": []}', "thinking": '{"facts": [{"subject":"ignored"}]}'}
+
+    assert _ollama_response_text(data) == '{"facts": []}'
+
+
+def test_ollama_response_text_falls_back_to_thinking_json():
+    data = {
+        "response": "",
+        "thinking": '{"facts": [{"subject": "Zhuk-MS", "predicate": "HAS_EXPORT_DESIGNATION", "object": "Zhuk-MSE"}]}',
+    }
+
+    assert _ollama_response_text(data) == data["thinking"]
 
 def test_chunk_text_uses_overlap():
     chunks = chunk_text("abcdefghij", max_chars=6, overlap=2)
