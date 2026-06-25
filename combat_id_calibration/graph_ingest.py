@@ -168,7 +168,17 @@ def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
     """Build a broad prompt for extracting auditable graph triples."""
 
     return f"""You extract a broad, varied set of knowledge-graph facts for a combat-identification evidence graph.
-Return only valid JSON matching this schema:
+
+JSON output contract:
+- Your entire response must be exactly one JSON object and nothing else.
+- Start the response with {{ and end it with }}.
+- Do not include Markdown fences, prose, comments, explanations, chain-of-thought, or reasoning text.
+- Do not wrap the JSON object in a string.
+- Use double quotes for every JSON key and string value.
+- Escape embedded double quotes and control characters inside JSON strings.
+- Do not use trailing commas, NaN, Infinity, undefined, null facts, or Python-style literals.
+- If the chunk supports no facts, return exactly {{"facts":[]}}.
+- Otherwise, return only this schema:
 {{"facts":[{{"subject":"entity name","predicate":"RELATION_IN_UPPER_SNAKE_CASE","object":"entity/value","evidence":"short supporting quote or paraphrase","confidence":0.0}}]}}
 
 Extraction goal:
