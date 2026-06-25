@@ -38,6 +38,9 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     prompt = build_extraction_prompt(document, "The MiG-29 uses N019 radar and R-27 missiles.")
 
     assert "broad, varied set" in prompt
+    assert "Your entire response must be exactly one JSON object and nothing else." in prompt
+    assert "Do not include Markdown fences, prose, comments, explanations, chain-of-thought" in prompt
+    assert "If the chunk supports no facts, return exactly" in prompt
     assert "Aim for 8-20 diverse facts" in prompt
     assert "Cover different subjects" in prompt
     assert "HAS_RANGE" in prompt
