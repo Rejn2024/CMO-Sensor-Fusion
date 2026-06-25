@@ -14,14 +14,22 @@ import html.parser
 import importlib
 import json
 import re
+import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 DEFAULT_MODEL = "qwen3.5:9b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+
+def _emit_diagnostic(enabled: bool, message: str) -> None:
+    """Print extraction diagnostics to stderr when enabled."""
+
+    if enabled:
+        print(f"[graph-ingest] {message}", file=sys.stderr)
 
 
 @dataclass(frozen=True)
@@ -224,46 +232,95 @@ def _json_object_candidates(text: str) -> Iterable[str]:
                 start = None
 
 
-def _extract_json_object(response: str) -> dict[str, object]:
+def _extract_json_object(
+    response: str,
+    diagnostic: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     """Return the first facts JSON object from an LLM response, or an empty payload."""
 
     text = response.strip()
     if not text:
+        if diagnostic:
+            diagnostic("model response was empty")
         return {"facts": []}
+    original_length = len(text)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    if diagnostic and len(text) != original_length:
+        diagnostic(f"removed reasoning block(s); parseable response length is {len(text)} characters")
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         text = fenced.group(1).strip()
+        if diagnostic:
+            diagnostic(f"using fenced JSON block with {len(text)} characters")
 
     fallback: dict[str, object] | None = None
+    candidate_count = 0
+    decode_errors = 0
     for candidate in _json_object_candidates(text):
+        candidate_count += 1
         try:
             payload = json.loads(candidate)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as error:
+            decode_errors += 1
+            if diagnostic:
+                diagnostic(f"JSON candidate {candidate_count} failed to decode at char {error.pos}: {error.msg}")
             continue
         if not isinstance(payload, dict):
+            if diagnostic:
+                diagnostic(f"JSON candidate {candidate_count} decoded to {type(payload).__name__}, not an object")
             continue
         if "facts" in payload:
+            if diagnostic:
+                facts_value = payload.get("facts")
+                fact_count = len(facts_value) if isinstance(facts_value, list) else "non-list"
+                diagnostic(f"JSON candidate {candidate_count} contains facts={fact_count}")
             return payload
+        if diagnostic:
+            diagnostic(f"JSON candidate {candidate_count} has keys {sorted(payload.keys())}, but no 'facts' key")
         if fallback is None:
             fallback = payload
+    if diagnostic:
+        diagnostic(f"found {candidate_count} JSON object candidate(s), {decode_errors} decode error(s), and no facts object")
     return fallback or {"facts": []}
 
 
-def parse_extracted_facts(response: str, document: SourceDocument) -> list[ExtractedFact]:
+def parse_extracted_facts(
+    response: str,
+    document: SourceDocument,
+    diagnostic: Callable[[str], None] | None = None,
+) -> list[ExtractedFact]:
     """Parse the model's JSON response and normalize fact records."""
 
-    payload = _extract_json_object(response)
+    payload = _extract_json_object(response, diagnostic=diagnostic)
+    raw_facts = payload.get("facts", [])
+    if not isinstance(raw_facts, list):
+        if diagnostic:
+            diagnostic(f"'facts' value is {type(raw_facts).__name__}, not a list")
+        return []
+
     facts: list[ExtractedFact] = []
-    for item in payload.get("facts", []):
+    skipped = 0
+    for index, item in enumerate(raw_facts, start=1):
         if not isinstance(item, dict):
+            skipped += 1
+            if diagnostic:
+                diagnostic(f"skipping fact {index}: item is {type(item).__name__}, not an object")
             continue
         subject = str(item.get("subject", "")).strip()
         predicate = re.sub(r"[^A-Z0-9_]+", "_", str(item.get("predicate", "RELATED_TO")).upper()).strip("_") or "RELATED_TO"
         obj = str(item.get("object", "")).strip()
         if not subject or not obj:
+            skipped += 1
+            if diagnostic:
+                diagnostic(f"skipping fact {index}: missing subject or object")
             continue
-        confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0))))
+        try:
+            confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            skipped += 1
+            if diagnostic:
+                diagnostic(f"skipping fact {index}: confidence is not numeric")
+            continue
         facts.append(
             ExtractedFact(
                 subject=subject,
@@ -276,6 +333,8 @@ def parse_extracted_facts(response: str, document: SourceDocument) -> list[Extra
                 locator=document.locator,
             )
         )
+    if diagnostic:
+        diagnostic(f"normalized {len(facts)} fact(s); skipped {skipped} invalid item(s)")
     return facts
 
 
@@ -285,14 +344,58 @@ def extract_facts(
     ollama_url: str = DEFAULT_OLLAMA_URL,
     max_chars: int = 6000,
     overlap: int = 500,
+    diagnostics: bool = True,
 ) -> list[ExtractedFact]:
     """Extract graph facts from source documents with a local Ollama model."""
 
     facts: list[ExtractedFact] = []
+    document_count = 0
+    chunk_count = 0
+    _emit_diagnostic(
+        diagnostics,
+        f"starting fact extraction with model={model!r}, ollama_url={ollama_url!r}, max_chars={max_chars}, overlap={overlap}",
+    )
     for document in documents:
-        for chunk in chunk_text(document.text, max_chars=max_chars, overlap=overlap):
+        document_count += 1
+        chunks = chunk_text(document.text, max_chars=max_chars, overlap=overlap)
+        _emit_diagnostic(
+            diagnostics,
+            (
+                f"document {document_count}: title={document.title!r}, source_id={document.source_id}, "
+                f"type={document.source_type}, text_chars={len(document.text)}, chunks={len(chunks)}"
+            ),
+        )
+        if not chunks:
+            _emit_diagnostic(diagnostics, f"document {document_count} produced no chunks; check source text extraction")
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            chunk_count += 1
+            _emit_diagnostic(
+                diagnostics,
+                f"document {document_count} chunk {chunk_index}/{len(chunks)}: sending {len(chunk)} chars to Ollama",
+            )
             response = ollama_generate(build_extraction_prompt(document, chunk), model=model, ollama_url=ollama_url)
-            facts.extend(parse_extracted_facts(response, document))
+            preview = response[:300].replace("\n", "\\n")
+            _emit_diagnostic(
+                diagnostics,
+                f"document {document_count} chunk {chunk_index}/{len(chunks)}: received {len(response)} chars; preview={preview!r}",
+            )
+            before = len(facts)
+            facts.extend(
+                parse_extracted_facts(
+                    response,
+                    document,
+                    diagnostic=(
+                        lambda message, doc_index=document_count, current_chunk=chunk_index, total_chunks=len(chunks): _emit_diagnostic(
+                            diagnostics, f"document {doc_index} chunk {current_chunk}/{total_chunks}: {message}"
+                        )
+                    ),
+                )
+            )
+            _emit_diagnostic(
+                diagnostics,
+                f"document {document_count} chunk {chunk_index}/{len(chunks)}: added {len(facts) - before} fact(s)",
+            )
+    _emit_diagnostic(diagnostics, f"finished extraction: documents={document_count}, chunks={chunk_count}, facts={len(facts)}")
     return facts
 
 
@@ -432,6 +535,7 @@ def add_ingest_parser(commands: argparse._SubParsersAction[argparse.ArgumentPars
     parser.add_argument("--facts-jsonl", help="optional JSONL file for extracted facts")
     parser.add_argument("--max-chars", type=int, default=6000, help="maximum characters per LLM chunk")
     parser.add_argument("--overlap", type=int, default=500, help="overlap characters between chunks")
+    parser.add_argument("--quiet-extraction", action="store_true", help="suppress fact-extraction diagnostics on stderr")
 
 
 def run_ingest_command(args: argparse.Namespace) -> None:
@@ -440,7 +544,14 @@ def run_ingest_command(args: argparse.Namespace) -> None:
     documents = load_documents(args.pdf, args.wikipedia)
     if not documents:
         raise ValueError("provide at least one --pdf or --wikipedia source")
-    facts = extract_facts(documents, model=args.model, ollama_url=args.ollama_url, max_chars=args.max_chars, overlap=args.overlap)
+    facts = extract_facts(
+        documents,
+        model=args.model,
+        ollama_url=args.ollama_url,
+        max_chars=args.max_chars,
+        overlap=args.overlap,
+        diagnostics=not args.quiet_extraction,
+    )
     if args.facts_jsonl:
         write_facts_jsonl(facts, args.facts_jsonl)
     populate_neo4j(facts, args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database)

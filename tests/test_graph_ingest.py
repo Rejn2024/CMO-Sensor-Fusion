@@ -10,6 +10,7 @@ from combat_id_calibration.graph_ingest import (
     _write_fact,
     build_extraction_prompt,
     chunk_text,
+    extract_facts,
     create_neo4j_schema,
     parse_extracted_facts,
     stable_id,
@@ -41,6 +42,48 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     assert "Cover different subjects" in prompt
     assert "HAS_RANGE" in prompt
     assert "DISTINGUISHES_FROM" in prompt
+
+
+def test_extract_facts_emits_chunk_and_parse_diagnostics(monkeypatch, capsys):
+    document = SourceDocument(
+        source_id=stable_id("pdf", "diagnostics"),
+        source_type="pdf",
+        locator="diagnostics.pdf",
+        title="Diagnostics",
+        text="The MiG-29 uses N019 radar.",
+    )
+
+    def fake_generate(prompt, model, ollama_url):
+        assert "The MiG-29 uses N019 radar." in prompt
+        return '{"facts": [{"subject": "MiG-29", "predicate": "HAS_SENSOR", "object": "N019 radar", "confidence": 0.9}]}'
+
+    monkeypatch.setattr("combat_id_calibration.graph_ingest.ollama_generate", fake_generate)
+
+    facts = extract_facts([document], model="test-model", max_chars=100, overlap=10)
+
+    captured = capsys.readouterr()
+    assert len(facts) == 1
+    assert "starting fact extraction" in captured.err
+    assert "document 1: title='Diagnostics'" in captured.err
+    assert "received" in captured.err
+    assert "JSON candidate 1 contains facts=1" in captured.err
+    assert "finished extraction: documents=1, chunks=1, facts=1" in captured.err
+
+
+def test_extract_facts_diagnostics_report_empty_source(capsys):
+    document = SourceDocument(
+        source_id=stable_id("pdf", "empty-diagnostics"),
+        source_type="pdf",
+        locator="empty.pdf",
+        title="Empty",
+        text="",
+    )
+
+    assert extract_facts([document], diagnostics=True) == []
+
+    captured = capsys.readouterr()
+    assert "chunks=0" in captured.err
+    assert "produced no chunks" in captured.err
 
 
 def test_parse_extracted_facts_normalizes_model_json():
