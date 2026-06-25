@@ -160,14 +160,16 @@ def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = D
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=180) as response:
-        data = json.loads(response.read().decode("utf-8"))
+        rr = response.read()
+        print(rr.decode("utf-8"))
+        data = json.loads(rr.decode("utf-8"))
     return str(data.get("response", ""))
 
 
 def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
     """Build a broad prompt for extracting auditable graph triples."""
 
-    return f"""You extract a broad, varied set of knowledge-graph facts for a combat-identification evidence graph.
+    return f"""You extract a broad, varied set of knowledge-graph facts for a general information evidence graph about aeroplanes and radars.
 
 JSON output contract:
 - Your entire response must be exactly one JSON object and nothing else.
@@ -352,8 +354,8 @@ def extract_facts(
     documents: Iterable[SourceDocument],
     model: str = DEFAULT_MODEL,
     ollama_url: str = DEFAULT_OLLAMA_URL,
-    max_chars: int = 6000,
-    overlap: int = 500,
+    max_chars: int = 2000,
+    overlap: int = 200,
     diagnostics: bool = True,
 ) -> list[ExtractedFact]:
     """Extract graph facts from source documents with a local Ollama model."""
