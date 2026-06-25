@@ -149,10 +149,41 @@ def read_wikipedia(url: str) -> SourceDocument:
     )
 
 
-def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = DEFAULT_OLLAMA_URL) -> str:
-    """Call Ollama's local generation API and return the raw response text."""
+def _ollama_response_text(data: dict[str, object]) -> str:
+    """Return the parseable model text from an Ollama API response."""
 
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json"}).encode("utf-8")
+    response = data.get("response", "")
+    if isinstance(response, str) and response.strip():
+        return response
+
+    message = data.get("message")
+    if isinstance(message, dict):
+        content = message.get("content", "")
+        if isinstance(content, str) and content.strip():
+            return content
+
+    # Some reasoning-capable Ollama models place the final JSON in ``thinking``
+    # when the request does not disable thinking, while leaving ``response``
+    # empty. Treat that field as a compatibility fallback so older notebook runs
+    # and model variants still produce extractable facts.
+    thinking = data.get("thinking", "")
+    if isinstance(thinking, str) and thinking.strip():
+        return thinking
+    return ""
+
+
+def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = DEFAULT_OLLAMA_URL) -> str:
+    """Call Ollama's local generation API and return parseable model text."""
+
+    payload = json.dumps(
+        {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "think": False,
+        }
+    ).encode("utf-8")
     request = urllib.request.Request(
         f"{ollama_url.rstrip('/')}/api/generate",
         data=payload,
@@ -160,10 +191,10 @@ def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = D
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=180) as response:
-        rr = response.read()
-        print(rr.decode("utf-8"))
-        data = json.loads(rr.decode("utf-8"))
-    return str(data.get("response", ""))
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        return ""
+    return _ollama_response_text(data)
 
 
 def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
