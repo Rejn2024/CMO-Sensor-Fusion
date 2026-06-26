@@ -8,6 +8,7 @@ from .calibrator import TemperatureCalibrator, _softmax
 from .io import read_examples, write_jsonl
 from .metrics import calibration_report
 from .graph_ingest import add_ingest_parser, run_ingest_command
+from .cmo_observation_ingest import add_cmo_observation_parser
 
 
 def main() -> None:
@@ -20,6 +21,7 @@ def main() -> None:
     evaluate = commands.add_parser("evaluate", help="compare raw softmax and calibrated probabilities")
     evaluate.add_argument("model"); evaluate.add_argument("input"); evaluate.add_argument("--bins", type=int, default=10)
     add_ingest_parser(commands)
+    add_cmo_observation_parser(commands)
     args = parser.parse_args()
     if args.command == "fit":
         classes, logits, labels, _ = read_examples(args.input)
@@ -40,8 +42,10 @@ def main() -> None:
         if classes != list(model.classes): raise ValueError("input classes differ from model classes")
         result = {"temperature": model.temperature, "raw": calibration_report([_softmax(row, 1.0) for row in logits], labels, args.bins), "calibrated": calibration_report([list(row.values()) for row in model.calibrate_many(logits)], labels, args.bins)}
         print(json.dumps(result, indent=2))
-    else:
+    elif args.command == "ingest-graph":
         run_ingest_command(args)
+    else:
+        args.handler(args)
 
 if __name__ == "__main__":
     main()
