@@ -9,6 +9,7 @@ from .io import read_examples, write_jsonl
 from .metrics import calibration_report
 from .graph_ingest import add_ingest_parser, run_ingest_command
 from .cmo_observation_ingest import add_cmo_observation_parser
+from .feature_extraction import add_feature_extraction_parser
 
 
 def main() -> None:
@@ -22,6 +23,7 @@ def main() -> None:
     evaluate.add_argument("model"); evaluate.add_argument("input"); evaluate.add_argument("--bins", type=int, default=10)
     add_ingest_parser(commands)
     add_cmo_observation_parser(commands)
+    add_feature_extraction_parser(commands)
     args = parser.parse_args()
     if args.command == "fit":
         classes, logits, labels, _ = read_examples(args.input)

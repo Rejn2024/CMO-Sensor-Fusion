@@ -87,6 +87,25 @@ python -m combat_id_calibration ingest-cmo-observations \
 
 This follows the architecture seed sequence: CMO scenario output -> observation parser -> graph writer -> feature extractor/probability model. Downstream Cypher feature extraction can join observation evidence to the Wikipedia radar graph through sensor names, aliases, emitted signatures, radar families, platform classes, and other reference facts.
 
+### Graph neighbourhood feature extraction
+
+The `extract-features` command materializes the feature-extraction layer between Neo4j evidence queries and calibration. Provide one JSON object per contact-hypothesis-time combination, and the command writes deterministic numerical features such as `supporting_path_count`, `contradicting_path_count`, `mean_source_reliability`, `recency`, `shortest_path_to_platform_class`, `emission_match_score`, `kinematic_match_score`, and `contradiction_score`. These records are auditable inputs for logit construction; they are not calibrated probabilities.
+
+```bash
+python -m combat_id_calibration extract-features feature-requests.jsonl feature-records.jsonl \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-password "$NEO4J_PASSWORD" \
+  --include-logit
+```
+
+Example request:
+
+```json
+{"scenario_id":"raid-001","contact_id":"C-101","observation_time":"2026-06-15T10:00:00Z","hypothesis":"hostile_fighter"}
+```
+
+
 ## Usage
 
 The dependency-free package implements multiclass temperature scaling. This method preserves the graph model's candidate ranking while correcting global over/under-confidence by minimizing held-out negative log loss.
