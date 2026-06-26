@@ -1,0 +1,146 @@
+Recommended Architecture Seed
+=============================
+
+Architecture
+------------
+Graph Database
+    ↓
+Feature Extraction
+    ↓
+Calibrated Probabilistic Model
+    ↓
+LLM Explanation Layer
+
+Core Principle
+--------------
+The LLM should not generate probabilities directly. The graph database and calibrated statistical model produce probability estimates; the LLM explains them using retrieved evidence.
+
+Graph Database Layer
+--------------------
+Stores the evolving world state as a knowledge graph.
+
+Typical nodes:
+- Contact
+- Sensor
+- Track
+- Emission
+- PlatformClass
+- Zone
+- Mission
+- Hypothesis
+
+Typical relationships:
+- DETECTED_BY
+- EMITTED
+- LOCATED_IN
+- HAS_KINEMATICS
+- SUPPORTS
+- CONTRADICTS
+
+Each observation should include metadata such as timestamp, source, sensor reliability, confidence, and recency.
+
+Feature Extraction Layer
+------------------------
+Converts graph neighbourhoods into numerical feature vectors for each
+(contact × hypothesis × time) instance.
+
+Example features:
+- Supporting path count
+- Contradicting path count
+- Mean source reliability
+- Evidence recency
+- Shortest path to platform class
+- Emission match score
+- Kinematic match score
+- Origin airbase score
+- Missing IFF penalty
+- Contradiction score
+
+Calibrated Probabilistic Model
+------------------------------
+Produces probabilities over competing hypotheses.
+
+Suggested initial models:
+- Logistic Regression
+- Gradient Boosted Trees (XGBoost/LightGBM)
+
+Future options:
+- Graph Neural Networks
+- Bayesian models
+
+Training data should pair graph state at time T, extracted features, and ground-truth outcome at time T+Δ.
+
+Apply calibration using:
+- Platt scaling
+- Isotonic regression
+- Temperature scaling
+
+Evaluation
+----------
+Evaluate with:
+- Accuracy
+- Confusion matrix
+- Log loss
+- Brier score
+- Expected Calibration Error (ECE)
+- Reliability diagrams
+
+Calibration quality is as important as classification accuracy.
+
+LLM Explanation Layer
+---------------------
+Receives:
+- Calibrated probabilities
+- Supporting graph evidence
+- Contradicting evidence
+- Missing evidence
+- Uncertainty indicators
+
+Responsibilities:
+- Explain the most likely hypothesis
+- Explain confidence limits
+- Describe supporting and contradicting evidence
+- Recommend additional evidence to reduce uncertainty
+
+The LLM should never modify the probabilities produced by the calibrated model.
+
+Suggested CMO / RL Pipeline
+---------------------------
+CMO Scenario Output
+    ↓
+Observation Parser
+    ↓
+Graph Writer
+    ↓
+Feature Extractor
+    ↓
+Probability Model
+    ↓
+LLM Explainer
+    ↓
+Planning Agent / RL Policy
+
+Suggested MVP
+-------------
+Modules:
+- graph_schema.py
+- ingest_observation.py
+- feature_extractor.py
+- train_probability_model.py
+- calibrate_model.py
+- evaluate_calibration.py
+- explain_with_llm.py
+
+Artifacts:
+- observations.jsonl
+- ground_truth.jsonl
+- feature_rows.parquet
+- model.pkl
+- calibrator.pkl
+- explanation_examples.jsonl
+
+Key Takeaway
+------------
+Structure evidence in a graph database, transform it into quantitative features,
+estimate probabilities with a calibrated statistical model, and use the LLM as
+an evidence-grounded explanation layer rather than the source of probability.
