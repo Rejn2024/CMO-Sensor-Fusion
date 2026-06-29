@@ -198,9 +198,9 @@ def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = D
 
 
 def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
-    """Build a broad prompt for extracting auditable graph triples."""
+    """Build a CMO-emission-aware prompt for extracting auditable graph triples."""
 
-    return f"""You extract a broad, varied set of knowledge-graph facts for a general information evidence graph about aeroplanes and radars.
+    return f"""You extract a broad, varied set of knowledge-graph facts for a combat-identification evidence graph about aircraft, radars, emitters, operators, kinematics, and geography.
 
 JSON output contract:
 - Your entire response must be exactly one JSON object and nothing else.
@@ -220,16 +220,23 @@ Extraction goal:
 - Aim for 8-20 diverse facts when the chunk contains enough information; return fewer only when the source chunk is sparse.
 
 Include varied fact types where supported:
-- Entity taxonomy and aliases: IS_A, ALSO_KNOWN_AS, VARIANT_OF, PART_OF.
-- Platform, sensor, emitter, weapon, subsystem, signature, and track characteristics: HAS_SENSOR, HAS_WEAPON, HAS_SUBSYSTEM, EMITS, DETECTS, HAS_SIGNATURE, HAS_TRACK_FEATURE.
-- Operators, manufacturers, organizations, roles, missions, doctrine, and tactics: OPERATED_BY, MANUFACTURED_BY, HAS_ROLE, HAS_MISSION, USES_DOCTRINE, USES_TACTIC.
-- Capabilities, limitations, performance, ranges, frequencies, modes, datalinks, and interoperability: HAS_CAPABILITY, HAS_LIMITATION, HAS_RANGE, USES_FREQUENCY, HAS_MODE, USES_DATALINK, INTEROPERATES_WITH.
-- Geography, basing, deployment, timeline, conflicts, exercises, and operational context: LOCATED_IN, BASED_AT, DEPLOYED_TO, ENTERED_SERVICE, RETIRED_FROM_SERVICE, USED_IN, PARTICIPATED_IN.
+- Entity taxonomy and aliases: IS_A, ALSO_KNOWN_AS, VARIANT_OF, HAS_VARIANT, PART_OF.
+- Platform identity and operator hypotheses: PLATFORM_TYPE, AIRCRAFT_FAMILY, NATO_REPORTING_NAME, OPERATED_BY, OPERATOR_COUNTRY, SERVICE_WITH, MANUFACTURED_BY.
+- Emitter and sensor evidence: HAS_SENSOR, USES_RADAR, HAS_EMITTER, EMITS, EMITTER_TYPE, RADAR_BAND, HAS_MODE, USES_FREQUENCY, DETECTS.
+- CMO observation compatibility fields: HAS_TARGET_TYPE, HAS_TRACK_FEATURE, TYPICAL_SPEED_KT, MAX_SPEED_KT, CRUISE_SPEED_KT, SERVICE_CEILING_M, TYPICAL_ALTITUDE_M, HAS_KINEMATIC_PROFILE.
+- Location and operating geography: LOCATED_IN, BASED_AT, DEPLOYED_TO, OPERATES_IN, OPERATOR_COUNTRY, HOME_BASE_COUNTRY, USED_IN, PARTICIPATED_IN.
+- Capabilities, limitations, performance, ranges, datalinks, weapons, subsystems, and interoperability: HAS_CAPABILITY, HAS_LIMITATION, HAS_RANGE, USES_DATALINK, HAS_WEAPON, HAS_SUBSYSTEM, INTEROPERATES_WITH.
 - Identification evidence and caveats: SUPPORTS_IDENTIFICATION, CONTRADICTS_IDENTIFICATION, DISTINGUISHES_FROM, INDICATES, DERIVED_FROM.
 - Quantitative values and named attributes that help disambiguate entities.
 
+CMO LuaHistory observation ontology to support:
+- Dynamic observations contain Emission_sensor_name, Emission_type, Emission_role, Emission_latitude, Emission_longitude, Emission_heading, Emission_altitude, Emission_speed, Emission_target_type, and classification level.
+- Extract static reference facts that connect emitter aliases and radar designations to likely aircraft identities/variants, platform type, operator country, typical kinematics, and operating geography.
+- For a radar/emitter page, explicitly connect the radar/emitter to host platforms and variants when supported, e.g. radar HAS_PLATFORM aircraft variant or aircraft HAS_SENSOR radar.
+- For an aircraft page, explicitly connect aircraft variants to sensors/emitters, operator countries, target/platform class, speed/altitude limits, and operating locations when supported.
+
 Rules:
-- Extract factual relationships useful for identifying platforms, sensors, emitters, weapons, military organizations, roles, capabilities, locations, doctrine, operational history, and discriminating context.
+- Extract factual relationships useful for identifying platforms, variants, sensors, emitters, weapons, military organizations, operator countries, kinematics, locations, doctrine, operational history, and discriminating context.
 - Cover different subjects mentioned in the chunk instead of repeatedly describing only the first or most prominent subject.
 - Use concise canonical entity names and preserve meaningful model numbers, designations, frequencies, ranges, dates, units, and locations.
 - Use upper snake case predicates; prefer the predicates above, but create similarly specific predicates when needed.
@@ -450,14 +457,61 @@ def write_facts_jsonl(facts: Sequence[ExtractedFact], path: str | Path) -> None:
 
 
 def create_neo4j_schema(session: object) -> None:
-    """Create the minimal Neo4j constraints used by this pipeline."""
+    """Create constraints for the reference/evidence ontology."""
 
     statements = [
         "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
         "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
+        "CREATE CONSTRAINT platform_entity_id IF NOT EXISTS FOR (p:Platform) REQUIRE p.id IS UNIQUE",
+        "CREATE CONSTRAINT sensor_entity_id IF NOT EXISTS FOR (s:Sensor) REQUIRE s.id IS UNIQUE",
+        "CREATE CONSTRAINT operator_entity_id IF NOT EXISTS FOR (o:Operator) REQUIRE o.id IS UNIQUE",
+        "CREATE CONSTRAINT country_entity_id IF NOT EXISTS FOR (c:Country) REQUIRE c.id IS UNIQUE",
+        "CREATE CONSTRAINT location_entity_id IF NOT EXISTS FOR (l:Location) REQUIRE l.id IS UNIQUE",
     ]
     for statement in statements:
         session.run(statement)
+
+
+_PLATFORM_PREDICATES = {
+    "HAS_SENSOR",
+    "USES_RADAR",
+    "HAS_EMITTER",
+    "HAS_WEAPON",
+    "HAS_SUBSYSTEM",
+    "HAS_VARIANT",
+    "HAS_PLATFORM",
+    "VARIANT_OF",
+    "OPERATED_BY",
+    "OPERATOR_COUNTRY",
+    "SERVICE_WITH",
+    "BASED_AT",
+    "DEPLOYED_TO",
+    "OPERATES_IN",
+    "TYPICAL_SPEED_KT",
+    "MAX_SPEED_KT",
+    "CRUISE_SPEED_KT",
+    "SERVICE_CEILING_M",
+    "TYPICAL_ALTITUDE_M",
+    "HAS_KINEMATIC_PROFILE",
+}
+
+_SENSOR_OBJECT_PREDICATES = {"HAS_SENSOR", "USES_RADAR", "HAS_EMITTER", "EMITS", "DETECTS", "RADAR_BAND", "HAS_MODE", "USES_FREQUENCY"}
+_OPERATOR_PREDICATES = {"OPERATED_BY", "SERVICE_WITH"}
+_COUNTRY_PREDICATES = {"OPERATOR_COUNTRY", "HOME_BASE_COUNTRY"}
+_LOCATION_PREDICATES = {"LOCATED_IN", "BASED_AT", "DEPLOYED_TO", "OPERATES_IN"}
+_TYPED_RELATION_PREDICATES = _PLATFORM_PREDICATES | _SENSOR_OBJECT_PREDICATES | _OPERATOR_PREDICATES | _COUNTRY_PREDICATES | _LOCATION_PREDICATES | {
+    "IS_A",
+    "ALSO_KNOWN_AS",
+    "NATO_REPORTING_NAME",
+    "PLATFORM_TYPE",
+    "AIRCRAFT_FAMILY",
+    "EMITTER_TYPE",
+    "HAS_TARGET_TYPE",
+    "SUPPORTS_IDENTIFICATION",
+    "CONTRADICTS_IDENTIFICATION",
+    "DISTINGUISHES_FROM",
+    "INDICATES",
+}
 
 
 def _write_fact(tx: object, fact: ExtractedFact) -> None:
@@ -494,6 +548,38 @@ def _write_fact(tx: object, fact: ExtractedFact) -> None:
         evidence=fact.evidence,
         confidence=fact.confidence,
     )
+    if fact.predicate in _TYPED_RELATION_PREDICATES:
+        tx.run(
+            f"""
+            MATCH (subject:Entity {{id: $subject_id}})
+            MATCH (object:Entity {{id: $object_id}})
+            SET subject:ReferenceEntity
+            SET object:ReferenceEntity
+            FOREACH (_ IN CASE WHEN $subject_is_platform THEN [1] ELSE [] END | SET subject:Platform)
+            FOREACH (_ IN CASE WHEN $object_is_platform THEN [1] ELSE [] END | SET object:Platform)
+            FOREACH (_ IN CASE WHEN $object_is_sensor THEN [1] ELSE [] END | SET object:Sensor)
+            FOREACH (_ IN CASE WHEN $subject_is_sensor THEN [1] ELSE [] END | SET subject:Sensor)
+            FOREACH (_ IN CASE WHEN $object_is_operator THEN [1] ELSE [] END | SET object:Operator)
+            FOREACH (_ IN CASE WHEN $object_is_country THEN [1] ELSE [] END | SET object:Country)
+            FOREACH (_ IN CASE WHEN $object_is_location THEN [1] ELSE [] END | SET object:Location)
+            MERGE (subject)-[rel:{fact.predicate}]->(object)
+              SET rel.source_id = $source_id,
+                  rel.evidence = $evidence,
+                  rel.confidence = $confidence
+            """,
+            subject_id=subject_id,
+            object_id=object_id,
+            source_id=fact.source_id,
+            evidence=fact.evidence,
+            confidence=fact.confidence,
+            subject_is_platform=fact.predicate in _PLATFORM_PREDICATES or fact.predicate in {"VARIANT_OF", "HAS_VARIANT"},
+            object_is_platform=fact.predicate in {"HAS_VARIANT", "HAS_PLATFORM", "VARIANT_OF"},
+            subject_is_sensor=fact.predicate in {"RADAR_BAND", "HAS_MODE", "USES_FREQUENCY", "EMITS", "DETECTS"},
+            object_is_sensor=fact.predicate in _SENSOR_OBJECT_PREDICATES,
+            object_is_operator=fact.predicate in _OPERATOR_PREDICATES,
+            object_is_country=fact.predicate in _COUNTRY_PREDICATES,
+            object_is_location=fact.predicate in _LOCATION_PREDICATES,
+        )
 
 
 def _validate_neo4j_credentials(user: str | None, password: str | None) -> tuple[str, str]:
