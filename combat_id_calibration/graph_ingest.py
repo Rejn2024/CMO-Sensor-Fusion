@@ -221,15 +221,17 @@ Extraction goal:
 
 Include varied fact types where supported:
 - Entity taxonomy and aliases: IS_A, ALSO_KNOWN_AS, VARIANT_OF, PART_OF.
-- Platform, sensor, emitter, weapon, subsystem, signature, and track characteristics: HAS_SENSOR, HAS_WEAPON, HAS_SUBSYSTEM, EMITS, DETECTS, HAS_SIGNATURE, HAS_TRACK_FEATURE.
+- Platform, sensor, emitter, weapon, subsystem, signature, and track characteristics: HAS_SENSOR, HAS_WEAPON, HAS_SUBSYSTEM, EMITS, DETECTS, HAS_SIGNATURE, HAS_TRACK_FEATURE, HAS_EMITTER_TYPE.
 - Operators, manufacturers, organizations, roles, missions, doctrine, and tactics: OPERATED_BY, MANUFACTURED_BY, HAS_ROLE, HAS_MISSION, USES_DOCTRINE, USES_TACTIC.
 - Capabilities, limitations, performance, ranges, frequencies, modes, datalinks, and interoperability: HAS_CAPABILITY, HAS_LIMITATION, HAS_RANGE, USES_FREQUENCY, HAS_MODE, USES_DATALINK, INTEROPERATES_WITH.
 - Geography, basing, deployment, timeline, conflicts, exercises, and operational context: LOCATED_IN, BASED_AT, DEPLOYED_TO, ENTERED_SERVICE, RETIRED_FROM_SERVICE, USED_IN, PARTICIPATED_IN.
+- CMO emission observations: emitter type, latitude/longitude, heading, altitude, speed, sensor/emitter name, classification level, candidate platform identity, aircraft variant, and operator country hypotheses.
 - Identification evidence and caveats: SUPPORTS_IDENTIFICATION, CONTRADICTS_IDENTIFICATION, DISTINGUISHES_FROM, INDICATES, DERIVED_FROM.
 - Quantitative values and named attributes that help disambiguate entities.
 
 Rules:
-- Extract factual relationships useful for identifying platforms, sensors, emitters, weapons, military organizations, roles, capabilities, locations, doctrine, operational history, and discriminating context.
+- Extract factual relationships useful for identifying platforms, sensors, emitters, weapons, military organizations, roles, capabilities, locations, kinematics, doctrine, operational history, and discriminating context.
+- For CMO PY_CONTACT_LOG-style emission rows, preserve emission sensor name and numeric emitter role/type, location, speed/heading/altitude, and any target class as evidence that SUPPORTS_IDENTIFICATION of the emitting platform identity, variant, and operator country.
 - Cover different subjects mentioned in the chunk instead of repeatedly describing only the first or most prominent subject.
 - Use concise canonical entity names and preserve meaningful model numbers, designations, frequencies, ranges, dates, units, and locations.
 - Use upper snake case predicates; prefer the predicates above, but create similarly specific predicates when needed.
