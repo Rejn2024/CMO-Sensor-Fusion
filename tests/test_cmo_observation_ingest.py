@@ -46,6 +46,11 @@ def test_create_cmo_observation_schema_uses_typed_constraints():
     statements = [call[0] for call in session.calls]
     assert "CREATE CONSTRAINT observation_id IF NOT EXISTS FOR (o:Observation) REQUIRE o.id IS UNIQUE" in statements
     assert "CREATE CONSTRAINT platform_class_id IF NOT EXISTS FOR (pc:PlatformClass) REQUIRE pc.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT emitter_type_id IF NOT EXISTS FOR (et:EmitterType) REQUIRE et.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT kinematics_id IF NOT EXISTS FOR (k:Kinematics) REQUIRE k.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT location_id IF NOT EXISTS FOR (l:Location) REQUIRE l.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT hypothesis_id IF NOT EXISTS FOR (h:Hypothesis) REQUIRE h.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT operator_country_id IF NOT EXISTS FOR (oc:OperatorCountry) REQUIRE oc.id IS UNIQUE" in statements
     assert "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE" in statements
 
 
@@ -65,6 +70,17 @@ def test_write_observation_emits_phase_two_ontology_cypher():
     assert "OBSERVED_BY" in statement
     assert "EMITTED" in statement
     assert "CLASSIFIED_AS" in statement
+    assert "HAS_EMITTER_TYPE" in statement
+    assert "HAS_KINEMATICS" in statement
+    assert "HAS_LOCATION" in statement
+    assert "HAS_HYPOTHESIS" in statement
+    assert "IDENTIFIES_PLATFORM" in statement
+    assert "IDENTIFIES_VARIANT" in statement
+    assert "HAS_OPERATOR_COUNTRY" in statement
+    assert parameters["emitter_type"] == "airborne fire-control radar"
+    assert parameters["hypothesis_identity"] == "Mikoyan MiG-29"
+    assert parameters["hypothesis_variant"] == "MiG-29KUB Fulcrum D"
+    assert parameters["operator_country"] == "Russia"
     assert parameters["sensor_aircraft"] == "Typhoon FGR.4"
     assert parameters["emission_sensor_name"] == "Slot Back [N-010 Zhuk-M]"
     assert parameters["emission_speed"] == 479.64691162109

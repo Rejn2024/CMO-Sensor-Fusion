@@ -20,7 +20,29 @@ from typing import Iterable, Iterator, Sequence
 from .graph_ingest import _neo4j_connection_error_message, _validate_neo4j_credentials, stable_id
 
 LOG_PREFIX = "PY_CONTACT_LOG"
-OBSERVATION_SCHEMA = "cmo_emission_observation_v1"
+OBSERVATION_SCHEMA = "cmo_emission_observation_v2"
+
+
+EMITTER_PLATFORM_PRIORS = {
+    "CAPTOR": {"identity": "Eurofighter Typhoon", "variant": "Typhoon FGR.4", "operator_country": "United Kingdom"},
+    "Slot Back [N-010 Zhuk-M]": {"identity": "Mikoyan MiG-29", "variant": "MiG-29KUB Fulcrum D", "operator_country": "Russia"},
+    "Slot Back [N-019 Rubin]": {"identity": "Mikoyan MiG-29", "variant": "MiG-29 Fulcrum C", "operator_country": "Russia"},
+    "Active Radar Seeker": {"identity": "air-to-air missile", "variant": "active radar guided missile", "operator_country": "unknown"},
+}
+
+
+def _emitter_type(sensor_name: str) -> str:
+    lowered = sensor_name.lower()
+    if "seeker" in lowered:
+        return "missile active radar seeker"
+    if "radar" in lowered or "captor" in lowered or "slot back" in lowered or "zhuk" in lowered or "rubin" in lowered:
+        return "airborne fire-control radar"
+    return "electromagnetic emitter"
+
+
+def _target_class_name(target_type: str) -> str:
+    text = target_type.strip()
+    return text.split(":", 1)[1].strip() if text.lower().startswith("class:") else ""
 
 _FIELD_RE = re.compile(r"\s*([^:,]+?)\s*:\s*(.*?)\s*(?=\s*,\s*[^:,]+?\s*:|\s*$)")
 
@@ -150,7 +172,13 @@ def create_cmo_observation_schema(session: object) -> None:
         "CREATE CONSTRAINT sensor_id IF NOT EXISTS FOR (s:Sensor) REQUIRE s.id IS UNIQUE",
         "CREATE CONSTRAINT platform_id IF NOT EXISTS FOR (p:Platform) REQUIRE p.id IS UNIQUE",
         "CREATE CONSTRAINT emission_id IF NOT EXISTS FOR (e:Emission) REQUIRE e.id IS UNIQUE",
+        "CREATE CONSTRAINT emitter_type_id IF NOT EXISTS FOR (et:EmitterType) REQUIRE et.id IS UNIQUE",
+        "CREATE CONSTRAINT kinematics_id IF NOT EXISTS FOR (k:Kinematics) REQUIRE k.id IS UNIQUE",
+        "CREATE CONSTRAINT location_id IF NOT EXISTS FOR (l:Location) REQUIRE l.id IS UNIQUE",
         "CREATE CONSTRAINT platform_class_id IF NOT EXISTS FOR (pc:PlatformClass) REQUIRE pc.id IS UNIQUE",
+        "CREATE CONSTRAINT platform_identity_id IF NOT EXISTS FOR (pi:PlatformIdentity) REQUIRE pi.id IS UNIQUE",
+        "CREATE CONSTRAINT operator_country_id IF NOT EXISTS FOR (oc:OperatorCountry) REQUIRE oc.id IS UNIQUE",
+        "CREATE CONSTRAINT hypothesis_id IF NOT EXISTS FOR (h:Hypothesis) REQUIRE h.id IS UNIQUE",
         "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
     ]:
         session.run(statement)
@@ -165,6 +193,19 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
     platform_id = stable_id("platform", observation.sensor_aircraft.lower())
     emission_id = stable_id("emission", observation.observation_id, observation.emission_sensor_name.lower())
     class_id = stable_id("platform-class", observation.emission_target_type.lower()) if observation.emission_target_type else ""
+    emitter_type = _emitter_type(observation.emission_sensor_name)
+    emitter_type_id = stable_id("emitter-type", emitter_type)
+    kinematics_id = stable_id("kinematics", observation.observation_id)
+    location_id = stable_id("location", observation.observation_id)
+    target_class_name = _target_class_name(observation.emission_target_type)
+    prior = EMITTER_PLATFORM_PRIORS.get(observation.emission_sensor_name, {})
+    hypothesis_variant = target_class_name or prior.get("variant", "")
+    hypothesis_identity = prior.get("identity", hypothesis_variant.split()[0] if hypothesis_variant else "")
+    operator_country = prior.get("operator_country", "")
+    hypothesis_id = stable_id("hypothesis", observation.observation_id, hypothesis_identity, hypothesis_variant, operator_country) if hypothesis_variant or hypothesis_identity else ""
+    identity_id = stable_id("platform-identity", hypothesis_identity.lower()) if hypothesis_identity else ""
+    variant_id = stable_id("platform-identity", hypothesis_variant.lower()) if hypothesis_variant else ""
+    operator_country_id = stable_id("operator-country", operator_country.lower()) if operator_country else ""
     source_id = stable_id("source", observation.source, str(observation.source_line or ""))
 
     tx.run(
@@ -181,12 +222,20 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
         MERGE (sensor:Sensor {id: $sensor_id}) SET sensor.name = $emission_sensor_name
         MERGE (emission:Emission {id: $emission_id})
           SET emission.sensor_name = $emission_sensor_name, emission.type = $emission_type, emission.role = $emission_role
+        MERGE (emitter_type:EmitterType {id: $emitter_type_id}) SET emitter_type.name = $emitter_type
+        MERGE (kinematics:Kinematics {id: $kinematics_id})
+          SET kinematics.heading = $emission_heading, kinematics.altitude = $emission_altitude, kinematics.speed = $emission_speed
+        MERGE (location:Location {id: $location_id})
+          SET location.latitude = $emission_latitude, location.longitude = $emission_longitude
         MERGE (source:Source {id: $source_id}) SET source.source_type = $source, source.locator = $source_locator
         MERGE (contact)-[:HAS_OBSERVATION]->(obs)
         MERGE (obs)-[:OBSERVED_BY]->(platform)
         MERGE (platform)-[:HAS_SENSOR]->(sensor)
         MERGE (contact)-[:EMITTED]->(emission)
+        MERGE (emission)-[:HAS_EMITTER_TYPE]->(emitter_type)
         MERGE (emission)-[:DETECTED_BY]->(sensor)
+        MERGE (obs)-[:HAS_KINEMATICS]->(kinematics)
+        MERGE (obs)-[:HAS_LOCATION]->(location)
         MERGE (obs)-[:DERIVED_FROM]->(source)
         WITH obs, contact
         CALL {
@@ -194,6 +243,33 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
           WITH obs, contact WHERE $class_id <> ''
           MERGE (platform_class:PlatformClass {id: $class_id}) SET platform_class.name = $emission_target_type
           MERGE (contact)-[:CLASSIFIED_AS {level: $emission_classificationlevel}]->(platform_class)
+        }
+        WITH obs, contact
+        CALL {
+          WITH obs, contact
+          WITH obs, contact WHERE $hypothesis_id <> ''
+          MERGE (hypothesis:Hypothesis {id: $hypothesis_id})
+            SET hypothesis.kind = 'platform_identity', hypothesis.confidence_basis = 'emitter_signature_and_cmo_classification'
+          MERGE (contact)-[:HAS_HYPOTHESIS]->(hypothesis)
+          MERGE (hypothesis)-[:SUPPORTED_BY]->(obs)
+          WITH hypothesis
+          CALL {
+            WITH hypothesis WHERE $identity_id <> ''
+            MERGE (identity:PlatformIdentity {id: $identity_id}) SET identity.name = $hypothesis_identity
+            MERGE (hypothesis)-[:IDENTIFIES_PLATFORM]->(identity)
+          }
+          WITH hypothesis
+          CALL {
+            WITH hypothesis WHERE $variant_id <> ''
+            MERGE (variant:PlatformIdentity {id: $variant_id}) SET variant.name = $hypothesis_variant
+            MERGE (hypothesis)-[:IDENTIFIES_VARIANT]->(variant)
+          }
+          WITH hypothesis
+          CALL {
+            WITH hypothesis WHERE $operator_country_id <> ''
+            MERGE (country:OperatorCountry {id: $operator_country_id}) SET country.name = $operator_country
+            MERGE (hypothesis)-[:HAS_OPERATOR_COUNTRY]->(country)
+          }
         }
         """,
         **asdict(observation),
@@ -203,6 +279,17 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
         platform_id=platform_id,
         emission_id=emission_id,
         class_id=class_id,
+        emitter_type=emitter_type,
+        emitter_type_id=emitter_type_id,
+        kinematics_id=kinematics_id,
+        location_id=location_id,
+        hypothesis_id=hypothesis_id,
+        hypothesis_identity=hypothesis_identity,
+        hypothesis_variant=hypothesis_variant,
+        identity_id=identity_id,
+        variant_id=variant_id,
+        operator_country=operator_country,
+        operator_country_id=operator_country_id,
         source_id=source_id,
         source_locator=f"line:{observation.source_line}" if observation.source_line else "log",
     )
