@@ -1,9 +1,9 @@
-"""Probability model utilities for platform and origin attribution.
+"""Probability model utilities for platform and operator-nation attribution.
 
 The graph feature extractor emits one row per (contact, hypothesis, time).  This
 module groups those rows into candidate sets, converts feature rows into logits,
 and applies a fitted calibrator so downstream code receives calibrated platform
-and country-of-origin probabilities rather than LLM-generated estimates.
+and operator-nation probabilities rather than LLM-generated estimates.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from .calibrator import TemperatureCalibrator, _softmax
 from .feature_extraction import ContactHypothesisFeatures, feature_logit
 from .io import write_jsonl
 
-PROBABILITY_SCHEMA = "platform_origin_probability_v1"
+PROBABILITY_SCHEMA = "platform_operator_nation_probability_v1"
 
 
 def _text(record: Mapping[str, object], *keys: str, default: str = "") -> str:
@@ -58,14 +58,15 @@ def feature_row_to_logit(record: Mapping[str, object]) -> float:
     return feature_logit(features)
 
 
-def platform_country_distribution(
+def platform_operator_nation_distribution(
     rows: Sequence[Mapping[str, object]], calibrator: TemperatureCalibrator | None = None
 ) -> dict[str, object]:
-    """Produce calibrated platform probabilities and marginal country probabilities.
+    """Produce calibrated platform probabilities and marginal operator-nation probabilities.
 
     ``rows`` must describe competing platform-level hypotheses for one contact at
     one observation time.  Candidate names are read from ``hypothesis`` (or
-    ``platform``/``platform_type``), and country labels are read from
+    ``platform``/``platform_type``), and operator nation labels are read from
+    ``operator_nation``/``operator_country``/``nation`` with legacy fallback to
     ``country``/``country_of_origin``/``origin_country``.
     """
 
@@ -84,23 +85,32 @@ def platform_country_distribution(
         platform_probs = calibrator.calibrate(logits)
         calibration = calibrator.to_dict()
 
-    country_probs: dict[str, float] = defaultdict(float)
+    operator_nation_probs: dict[str, float] = defaultdict(float)
     candidates: list[dict[str, object]] = []
     for row, platform in zip(rows, classes):
-        country = _text(row, "country", "country_of_origin", "origin_country", default="unknown")
+        operator_nation = _text(
+            row,
+            "operator_nation",
+            "operator_country",
+            "nation",
+            "country",
+            "country_of_origin",
+            "origin_country",
+            default="unknown",
+        )
         probability = float(platform_probs[platform])
-        country_probs[country] += probability
+        operator_nation_probs[operator_nation] += probability
         candidates.append(
             {
                 "platform": platform,
-                "country_of_origin": country,
+                "operator_nation": operator_nation,
                 "probability": probability,
                 "logit": feature_row_to_logit(row),
                 "evidence_query_id": _text(row, "evidence_query_id"),
             }
         )
     candidates.sort(key=lambda item: float(item["probability"]), reverse=True)
-    country_distribution = dict(sorted(country_probs.items(), key=lambda item: item[1], reverse=True))
+    operator_nation_distribution = dict(sorted(operator_nation_probs.items(), key=lambda item: item[1], reverse=True))
     first = rows[0]
     return {
         "schema": PROBABILITY_SCHEMA,
@@ -109,14 +119,17 @@ def platform_country_distribution(
         "observation_time": _text(first, "observation_time"),
         "top_platform": candidates[0]["platform"],
         "top_platform_probability": candidates[0]["probability"],
-        "top_country_of_origin": next(iter(country_distribution)),
-        "top_country_probability": next(iter(country_distribution.values())),
+        "top_operator_nation": next(iter(operator_nation_distribution)),
+        "top_operator_nation_probability": next(iter(operator_nation_distribution.values())),
         "platform_probabilities": {str(item["platform"]): item["probability"] for item in candidates},
-        "country_probabilities": country_distribution,
+        "operator_nation_probabilities": operator_nation_distribution,
         "candidates": candidates,
         "calibration": calibration,
     }
 
+
+# Backwards-compatible alias for callers that have not yet adopted operator-nation terminology.
+platform_country_distribution = platform_operator_nation_distribution
 
 def read_jsonl(path: str | Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -134,13 +147,13 @@ def run_probability_model(input_path: str | Path, output_path: str | Path, model
     calibrator = None
     if model_path:
         calibrator = TemperatureCalibrator.from_dict(json.loads(Path(model_path).read_text(encoding="utf-8")))
-    records = [platform_country_distribution(group, calibrator) for group in group_feature_rows(read_jsonl(input_path))]
+    records = [platform_operator_nation_distribution(group, calibrator) for group in group_feature_rows(read_jsonl(input_path))]
     write_jsonl(records, output_path)
     return records
 
 
 def add_probability_model_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = commands.add_parser("probability-model", help="assign calibrated platform and country probabilities from feature rows")
+    parser = commands.add_parser("probability-model", help="assign calibrated platform and operator-nation probabilities from feature rows")
     parser.add_argument("input", help="JSONL feature rows with one row per candidate platform hypothesis")
     parser.add_argument("output", help="JSONL probability assignments grouped by contact/time")
     parser.add_argument("--model", help="optional temperature calibrator JSON whose classes match each candidate group")
