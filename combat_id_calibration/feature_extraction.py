@@ -136,7 +136,11 @@ WHERE any(label IN labels(contradiction) WHERE label IN ['Entity', 'PlatformClas
 OPTIONAL MATCH (contact)-[:HAS_OBSERVATION]->(obs:Observation)
 OPTIONAL MATCH (obs)-[:DERIVED_FROM]->(source:Source)
 OPTIONAL MATCH (contact)-[:EMITTED]->(emission:Emission)
-WITH contact, properties(obs) AS obs_props, properties(source) AS source_props, properties(emission) AS emission_props,
+WITH contact, support_path, contradict_path,
+     properties(obs) AS obs_props,
+     properties(source) AS source_props,
+     properties(emission) AS emission_props
+WITH contact,
      count(DISTINCT support_path) AS supporting_path_count,
      count(DISTINCT contradict_path) AS contradicting_path_count,
      min(length(support_path)) AS shortest_path_to_platform_class,

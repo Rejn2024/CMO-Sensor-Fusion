@@ -119,6 +119,7 @@ def test_feature_extraction_cypher_avoids_schema_specific_warning_patterns():
     assert "source.confidence" not in FEATURE_EXTRACTION_CYPHER
     assert "rel.predicate" not in FEATURE_EXTRACTION_CYPHER
     assert "properties(source) AS source_props" in FEATURE_EXTRACTION_CYPHER
+    assert "WITH contact, support_path, contradict_path," in FEATURE_EXTRACTION_CYPHER
     assert "labels(hypothesis)" in FEATURE_EXTRACTION_CYPHER
 
 
