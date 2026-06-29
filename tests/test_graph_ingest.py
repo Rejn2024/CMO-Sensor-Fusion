@@ -52,13 +52,14 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     )
     prompt = build_extraction_prompt(document, "The MiG-29 uses N019 radar and R-27 missiles.")
 
-    assert "broad, varied set" in prompt
+    assert "combat-identification evidence graph" in prompt
     assert "Your entire response must be exactly one JSON object and nothing else." in prompt
     assert "Do not include Markdown fences, prose, comments, explanations, chain-of-thought" in prompt
     assert "If the chunk supports no facts, return exactly" in prompt
     assert "Aim for 8-20 diverse facts" in prompt
     assert "Cover different subjects" in prompt
-    assert "HAS_RANGE" in prompt
+    assert "TYPICAL_SPEED_KT" in prompt
+    assert "Emission_latitude" in prompt
     assert "DISTINGUISHES_FROM" in prompt
 
 
@@ -220,10 +221,13 @@ def test_create_neo4j_schema_uses_unique_constraints():
     session = RecordingRunner()
     create_neo4j_schema(session)
     statements = [call[0] for call in session.calls]
-    assert statements == [
+    assert statements[:2] == [
         "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
         "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
     ]
+    assert "CREATE CONSTRAINT platform_entity_id IF NOT EXISTS FOR (p:Platform) REQUIRE p.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT sensor_entity_id IF NOT EXISTS FOR (s:Sensor) REQUIRE s.id IS UNIQUE" in statements
+    assert "CREATE CONSTRAINT country_entity_id IF NOT EXISTS FOR (c:Country) REQUIRE c.id IS UNIQUE" in statements
 
 
 def test_write_fact_emits_parameterized_neo4j_cypher():
@@ -239,7 +243,7 @@ def test_write_fact_emits_parameterized_neo4j_cypher():
         confidence=0.9,
     )
     _write_fact(tx, fact)
-    assert len(tx.calls) == 1
+    assert len(tx.calls) == 2
     statement, parameters = tx.calls[0]
     assert "MERGE (subject:Entity" in statement
     assert "CREATE (subject)-[:FACT" in statement
@@ -248,6 +252,9 @@ def test_write_fact_emits_parameterized_neo4j_cypher():
     assert parameters["object"] == "N019 radar"
     assert parameters["predicate"] == "HAS_SENSOR"
     assert parameters["confidence"] == 0.9
+    typed_statement, typed_parameters = tx.calls[1]
+    assert "MERGE (subject)-[rel:HAS_SENSOR]->(object)" in typed_statement
+    assert typed_parameters["object_is_sensor"] is True
 
 
 def test_neo4j_connection_error_message_is_actionable():
