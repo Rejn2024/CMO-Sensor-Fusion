@@ -127,23 +127,23 @@ def feature_logit(features: ContactHypothesisFeatures, weights: Mapping[str, flo
 FEATURE_EXTRACTION_CYPHER = """
 MATCH (contact:Contact {id: $contact_id})
 OPTIONAL MATCH support_path = (contact)-[*1..4]-(hypothesis)
-WHERE (hypothesis:Entity OR hypothesis:PlatformClass OR hypothesis:CandidateIdentity)
-  AND coalesce(hypothesis.name, hypothesis.id) = $hypothesis
+WHERE any(label IN labels(hypothesis) WHERE label IN ['Entity', 'PlatformClass', 'CandidateIdentity'])
+  AND coalesce(properties(hypothesis)['name'], properties(hypothesis)['id']) = $hypothesis
   AND any(rel IN relationships(support_path) WHERE type(rel) IN ['SUPPORTS', 'FACT', 'CLASSIFIED_AS', 'EMITTED', 'DETECTED_BY'])
 OPTIONAL MATCH contradict_path = (contact)-[*1..4]-(contradiction)
-WHERE (contradiction:Entity OR contradiction:PlatformClass OR contradiction:CandidateIdentity)
-  AND any(rel IN relationships(contradict_path) WHERE type(rel) IN ['CONTRADICTS'] OR coalesce(rel.predicate, '') STARTS WITH 'CONTRADICT')
+WHERE any(label IN labels(contradiction) WHERE label IN ['Entity', 'PlatformClass', 'CandidateIdentity'])
+  AND any(rel IN relationships(contradict_path) WHERE type(rel) IN ['CONTRADICTS'] OR coalesce(properties(rel)['predicate'], '') STARTS WITH 'CONTRADICT')
 OPTIONAL MATCH (contact)-[:HAS_OBSERVATION]->(obs:Observation)
 OPTIONAL MATCH (obs)-[:DERIVED_FROM]->(source:Source)
 OPTIONAL MATCH (contact)-[:EMITTED]->(emission:Emission)
-WITH contact, obs, source, emission,
+WITH contact, properties(obs) AS obs_props, properties(source) AS source_props, properties(emission) AS emission_props,
      count(DISTINCT support_path) AS supporting_path_count,
      count(DISTINCT contradict_path) AS contradicting_path_count,
      min(length(support_path)) AS shortest_path_to_platform_class,
-     avg(coalesce(source.reliability, source.confidence, 0.5)) AS mean_source_reliability,
-     avg(CASE WHEN obs.age_seconds IS NULL THEN 0.5 ELSE 1.0 / (1.0 + toFloat(obs.age_seconds)) END) AS recency,
-     max(CASE WHEN toLower(coalesce(emission.sensor_name, '')) CONTAINS toLower($hypothesis) THEN 1.0 ELSE 0.0 END) AS emission_match_score,
-     avg(CASE WHEN obs.heading IS NOT NULL OR obs.speed IS NOT NULL OR obs.altitude IS NOT NULL THEN 0.5 ELSE 0.0 END) AS kinematic_match_score
+     avg(coalesce(source_props['reliability'], source_props['confidence'], 0.5)) AS mean_source_reliability,
+     avg(CASE WHEN obs_props['age_seconds'] IS NULL THEN 0.5 ELSE 1.0 / (1.0 + toFloat(obs_props['age_seconds'])) END) AS recency,
+     max(CASE WHEN toLower(coalesce(emission_props['sensor_name'], '')) CONTAINS toLower($hypothesis) THEN 1.0 ELSE 0.0 END) AS emission_match_score,
+     avg(CASE WHEN obs_props['heading'] IS NOT NULL OR obs_props['speed'] IS NOT NULL OR obs_props['altitude'] IS NOT NULL THEN 0.5 ELSE 0.0 END) AS kinematic_match_score
 RETURN supporting_path_count,
        contradicting_path_count,
        coalesce(mean_source_reliability, 0.0) AS mean_source_reliability,

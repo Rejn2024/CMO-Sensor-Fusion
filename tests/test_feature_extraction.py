@@ -113,6 +113,15 @@ def test_extract_features_with_session_runs_neighbourhood_query():
     assert features.emission_match_score == 1.0
 
 
+def test_feature_extraction_cypher_avoids_schema_specific_warning_patterns():
+    assert ":CandidateIdentity" not in FEATURE_EXTRACTION_CYPHER
+    assert "source.reliability" not in FEATURE_EXTRACTION_CYPHER
+    assert "source.confidence" not in FEATURE_EXTRACTION_CYPHER
+    assert "rel.predicate" not in FEATURE_EXTRACTION_CYPHER
+    assert "properties(source) AS source_props" in FEATURE_EXTRACTION_CYPHER
+    assert "labels(hypothesis)" in FEATURE_EXTRACTION_CYPHER
+
+
 def test_read_feature_requests_validates_jsonl(tmp_path):
     path = tmp_path / "requests.jsonl"
     path.write_text(json.dumps({"scenario_id": "s", "contact_id": "c", "observation_time": "t", "hypothesis": "h"}) + "\n")
