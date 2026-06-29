@@ -12,6 +12,7 @@ from .cmo_observation_ingest import add_cmo_observation_parser
 from .feature_extraction import add_feature_extraction_parser
 from .probability_model import add_probability_model_parser
 from .llm_explainer import add_llm_explainer_parser
+from .hypothesis_generation import add_hypothesis_generation_parser
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
     add_feature_extraction_parser(commands)
     add_probability_model_parser(commands)
     add_llm_explainer_parser(commands)
+    add_hypothesis_generation_parser(commands)
     args = parser.parse_args()
     if args.command == "fit":
         classes, logits, labels, _ = read_examples(args.input)
