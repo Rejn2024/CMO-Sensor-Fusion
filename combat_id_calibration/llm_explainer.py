@@ -40,8 +40,10 @@ def build_explanation_payload(probability_record: Mapping[str, object], evidence
     evidence = evidence or {}
     top_platform = probability_record.get("top_platform")
     top_platform_probability = float(probability_record.get("top_platform_probability", 0.0))
-    top_country = probability_record.get("top_country_of_origin")
-    top_country_probability = float(probability_record.get("top_country_probability", 0.0))
+    top_operator_nation = probability_record.get("top_operator_nation") or probability_record.get("top_country_of_origin")
+    top_operator_nation_probability = float(
+        probability_record.get("top_operator_nation_probability", probability_record.get("top_country_probability", 0.0))
+    )
     support = _items(evidence.get("supporting_evidence") or probability_record.get("supporting_evidence"))
     contradict = _items(evidence.get("contradicting_evidence") or probability_record.get("contradicting_evidence"))
     missing = _items(evidence.get("missing_evidence") or probability_record.get("missing_evidence"))
@@ -54,13 +56,13 @@ def build_explanation_payload(probability_record: Mapping[str, object], evidence
             uncertainty.append("The two leading platform hypotheses are separated by less than 0.15 probability.")
     summary = (
         f"Most likely emitter platform is {top_platform} with probability {top_platform_probability:.3f}; "
-        f"most likely country of origin is {top_country} with probability {top_country_probability:.3f}."
+        f"most likely operator nation is {top_operator_nation} with probability {top_operator_nation_probability:.3f}."
     )
     prompt_lines = [
         "Explain the supplied calibrated combat-identification probabilities without changing them.",
         summary,
         f"Platform distribution: {json.dumps(probability_record.get('platform_probabilities', {}), sort_keys=True)}",
-        f"Country distribution: {json.dumps(probability_record.get('country_probabilities', {}), sort_keys=True)}",
+        f"Operator-nation distribution: {json.dumps(probability_record.get('operator_nation_probabilities', probability_record.get('country_probabilities', {})), sort_keys=True)}",
         "Supporting evidence:",
         *(_evidence_lines(support, "  ") or ["  none supplied"]),
         "Contradicting evidence:",

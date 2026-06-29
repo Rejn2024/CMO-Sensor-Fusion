@@ -8,7 +8,7 @@ from combat_id_calibration.llm_explainer import build_explanation_payload
 from combat_id_calibration.probability_model import (
     PROBABILITY_SCHEMA,
     group_feature_rows,
-    platform_country_distribution,
+    platform_operator_nation_distribution,
 )
 
 
@@ -19,7 +19,7 @@ def candidate_rows():
             "contact_id": "c",
             "observation_time": "t",
             "hypothesis": "Su-27SM",
-            "country_of_origin": "Belarus",
+            "operator_nation": "Belarus",
             "supporting_path_count": 3,
             "emission_match_score": 1,
             "evidence_query_id": "q1",
@@ -29,7 +29,7 @@ def candidate_rows():
             "contact_id": "c",
             "observation_time": "t",
             "hypothesis": "MiG-29MT",
-            "country_of_origin": "Kazakhstan",
+            "operator_nation": "Kazakhstan",
             "supporting_path_count": 1,
             "contradicting_path_count": 1,
             "emission_match_score": 0.3,
@@ -38,14 +38,14 @@ def candidate_rows():
     ]
 
 
-def test_platform_country_distribution_assigns_platform_and_origin_probabilities():
-    result = platform_country_distribution(candidate_rows())
+def test_platform_operator_nation_distribution_assigns_platform_and_origin_probabilities():
+    result = platform_operator_nation_distribution(candidate_rows())
 
     assert result["schema"] == PROBABILITY_SCHEMA
     assert result["top_platform"] == "Su-27SM"
-    assert result["top_country_of_origin"] == "Belarus"
+    assert result["top_operator_nation"] == "Belarus"
     assert sum(result["platform_probabilities"].values()) == pytest.approx(1.0)
-    assert result["country_probabilities"]["Belarus"] == result["platform_probabilities"]["Su-27SM"]
+    assert result["operator_nation_probabilities"]["Belarus"] == result["platform_probabilities"]["Su-27SM"]
     assert result["candidates"][0]["evidence_query_id"] == "q1"
 
 
@@ -58,7 +58,7 @@ def test_group_feature_rows_groups_by_contact_time():
 
 
 def test_llm_explainer_preserves_probabilities_and_builds_grounded_prompt():
-    probability = platform_country_distribution(candidate_rows())
+    probability = platform_operator_nation_distribution(candidate_rows())
     payload = build_explanation_payload(
         probability,
         {
