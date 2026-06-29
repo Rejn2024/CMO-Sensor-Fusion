@@ -10,6 +10,8 @@ from .metrics import calibration_report
 from .graph_ingest import add_ingest_parser, run_ingest_command
 from .cmo_observation_ingest import add_cmo_observation_parser
 from .feature_extraction import add_feature_extraction_parser
+from .probability_model import add_probability_model_parser
+from .llm_explainer import add_llm_explainer_parser
 
 
 def main() -> None:
@@ -24,6 +26,8 @@ def main() -> None:
     add_ingest_parser(commands)
     add_cmo_observation_parser(commands)
     add_feature_extraction_parser(commands)
+    add_probability_model_parser(commands)
+    add_llm_explainer_parser(commands)
     args = parser.parse_args()
     if args.command == "fit":
         classes, logits, labels, _ = read_examples(args.input)

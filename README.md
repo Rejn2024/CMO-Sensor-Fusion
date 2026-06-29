@@ -105,6 +105,25 @@ Example request:
 {"scenario_id":"raid-001","contact_id":"C-101","observation_time":"2026-06-15T10:00:00Z","hypothesis":"hostile_fighter"}
 ```
 
+### Probability model and LLM explainer phases
+
+The `probability-model` command implements the architecture seed's Probability Model phase for platform-level emitter identification. It consumes feature rows grouped by `scenario_id`, `contact_id`, and `observation_time`, where each row is one competing platform hypothesis such as `Su-27SM` or `MiG-29MT`. Rows may include a precomputed `feature_logit`, or the command will derive a baseline logit from the graph-neighbourhood feature columns. Candidate rows should also include `country_of_origin` (or `country`/`origin_country`) so the model can report both platform probabilities and marginal country probabilities, for example Belarus versus Kazakhstan.
+
+```bash
+python -m combat_id_calibration probability-model feature-records.jsonl probability-assignments.jsonl \
+  --model calibration-model.json
+```
+
+Each output record preserves the full candidate distribution and adds `top_platform`, `top_platform_probability`, `top_country_of_origin`, `top_country_probability`, `platform_probabilities`, `country_probabilities`, and per-candidate evidence query references. If no calibration model is supplied, the command emits a deterministic uncalibrated softmax baseline for development only; operational runs should use a fitted calibrator.
+
+The `explain` command implements the LLM Explainer preparation phase. It turns calibrated probability records into auditable explanation payloads and prompts that explicitly instruct the LLM to explain, not change, model probabilities.
+
+```bash
+python -m combat_id_calibration explain probability-assignments.jsonl explanation-payloads.jsonl
+```
+
+Explanation payloads include the calibrated platform and country distributions, confidence-limit warnings, supporting evidence, contradicting evidence, missing evidence, and recommended collection prompts. This keeps the LLM downstream of the calibrated probability model as required by `GraphDB_Probability_Architecture_Seed.txt`.
+
 
 ## Usage
 
