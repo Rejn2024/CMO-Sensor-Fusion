@@ -223,7 +223,7 @@ Include varied fact types where supported:
 - Entity taxonomy and aliases: IS_A, ALSO_KNOWN_AS, VARIANT_OF, HAS_VARIANT, PART_OF.
 - Platform identity and operator hypotheses: PLATFORM_TYPE, AIRCRAFT_FAMILY, NATO_REPORTING_NAME, OPERATED_BY, OPERATOR_COUNTRY, SERVICE_WITH, MANUFACTURED_BY.
 - Emitter and sensor evidence: HAS_SENSOR, USES_RADAR, HAS_EMITTER, EMITS, EMITTER_TYPE, RADAR_BAND, HAS_MODE, USES_FREQUENCY, DETECTS.
-- CMO observation compatibility fields: HAS_TARGET_TYPE, HAS_TRACK_FEATURE, TYPICAL_SPEED_KT, MAX_SPEED_KT, CRUISE_SPEED_KT, SERVICE_CEILING_M, TYPICAL_ALTITUDE_M, HAS_KINEMATIC_PROFILE.
+- CMO observation compatibility fields: HAS_TARGET_TYPE, HAS_TRACK_FEATURE, TYPICAL_SPEED_KT, MAX_SPEED_KT, MAX_ALTITUDE_M, SERVICE_CEILING_M, CRUISE_SPEED_KT, TYPICAL_ALTITUDE_M, HAS_KINEMATIC_PROFILE.
 - Location and operating geography: LOCATED_IN, BASED_AT, DEPLOYED_TO, OPERATES_IN, OPERATOR_COUNTRY, HOME_BASE_COUNTRY, USED_IN, PARTICIPATED_IN.
 - Capabilities, limitations, performance, ranges, datalinks, weapons, subsystems, and interoperability: HAS_CAPABILITY, HAS_LIMITATION, HAS_RANGE, USES_DATALINK, HAS_WEAPON, HAS_SUBSYSTEM, INTEROPERATES_WITH.
 - Identification evidence and caveats: SUPPORTS_IDENTIFICATION, CONTRADICTS_IDENTIFICATION, DISTINGUISHES_FROM, INDICATES, DERIVED_FROM.
@@ -234,6 +234,8 @@ CMO LuaHistory observation ontology to support:
 - Extract static reference facts that connect emitter aliases and radar designations to likely aircraft identities/variants, platform type, operator country, typical kinematics, and operating geography.
 - For a radar/emitter page, explicitly connect the radar/emitter to host platforms and variants when supported, e.g. radar HAS_PLATFORM aircraft variant or aircraft HAS_SENSOR radar.
 - For an aircraft page, explicitly connect aircraft variants to sensors/emitters, operator countries, target/platform class, speed/altitude limits, and operating locations when supported.
+- Pay special attention to maximum aircraft performance values. Extract explicit maximum speed as MAX_SPEED_KT, and extract explicit maximum altitude, service ceiling, operational ceiling, or flight ceiling as SERVICE_CEILING_M or MAX_ALTITUDE_M.
+- Preserve units in the object value when given. If a source gives equivalent unit conversions, prefer the value in knots for MAX_SPEED_KT and meters for SERVICE_CEILING_M, MAX_ALTITUDE_M, or TYPICAL_ALTITUDE_M; otherwise include the source units so downstream code can parse or audit the value.
 
 Rules:
 - Extract factual relationships useful for identifying platforms, variants, sensors, emitters, weapons, military organizations, operator countries, kinematics, locations, doctrine, operational history, and discriminating context.

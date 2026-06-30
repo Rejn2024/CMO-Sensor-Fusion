@@ -101,6 +101,9 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
     OPTIONAL MATCH (operator)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY|LOCATED_IN]-(operator_country_via_operator)
     WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
+    OPTIONAL MATCH (kinematic_subject)-[kinematic_fact:FACT]->(kinematic_value)
+    WHERE kinematic_subject IN [platform, aircraft_variant]
+      AND kinematic_fact.predicate IN ['MAX_SPEED_KT', 'TYPICAL_SPEED_KT', 'CRUISE_SPEED_KT', 'SERVICE_CEILING_M', 'MAX_ALTITUDE_M', 'TYPICAL_ALTITUDE_M']
     WITH coalesce(platform.name, platform.id, platform.title) AS hypothesis,
          coalesce(aircraft_variant.name, aircraft_variant.id, aircraft_variant.title, platform.name, platform.id, platform.title) AS aircraft_variant,
          coalesce(emitter_variant.name, emitter_variant.id, emitter_variant.title, emitter.name, emitter.id, emitter.title) AS emitter_variant,
@@ -111,7 +114,13 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
          count(DISTINCT platform_path) AS support_count,
          collect(DISTINCT [rel IN relationships(platform_path) | type(rel)]) AS evidence_paths,
          labels(platform) AS platform_labels,
-         max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score
+         max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS max_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS typical_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'CRUISE_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS cruise_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'SERVICE_CEILING_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS service_ceiling_m_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS max_altitude_m_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS typical_altitude_m_values
     RETURN hypothesis,
            operator_nation,
            aircraft_variant,
@@ -120,7 +129,13 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
            support_count,
            evidence_paths,
            platform_labels,
-           semantic_match_score
+           semantic_match_score,
+           max_speed_kt_values,
+           typical_speed_kt_values,
+           cruise_speed_kt_values,
+           service_ceiling_m_values,
+           max_altitude_m_values,
+           typical_altitude_m_values
     ORDER BY semantic_match_score DESC, support_count DESC, hypothesis ASC, operator_nation ASC, aircraft_variant ASC, emitter_variant ASC
     LIMIT $limit
     """
@@ -208,6 +223,50 @@ def _rows(result: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [dict(row) for row in result]
 
 
+def _first_numeric_value(value: object, preferred_units: Sequence[str] = ()) -> float | None:
+    """Return the first parseable number from nested Neo4j scalar/list values.
+
+    When source strings include multiple unit conversions, prefer the value next
+    to the requested unit so ranges use knots/meters rather than Mach or feet.
+    """
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        for unit in preferred_units:
+            unit_match = re.search(
+                rf"([-+]?\d+(?:,\d{{3}})*(?:\.\d+)?)\s*{unit}\b",
+                value,
+                flags=re.IGNORECASE,
+            )
+            if unit_match:
+                return float(unit_match.group(1).replace(",", ""))
+        match = re.search(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?", value)
+        if match:
+            return float(match.group(0).replace(",", ""))
+        return None
+    if isinstance(value, Iterable):
+        for item in value:
+            parsed = _first_numeric_value(item, preferred_units)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _kinematic_range(
+    row: Mapping[str, Any], keys: Sequence[str], default_upper: float, preferred_units: Sequence[str] = ()
+) -> list[float]:
+    """Build the candidate [low, high] range from extracted max performance facts."""
+
+    for key in keys:
+        parsed = _first_numeric_value(row.get(key), preferred_units)
+        if parsed is not None and parsed > 0:
+            return [0.0, parsed]
+    return [0.0, default_upper]
+
+
 def probe_knowledge_graph_with_session(session: object, obs: EmissionObservation | Mapping[str, Any]) -> dict[str, object]:
     """Run diagnostic graph probes for the observation's emitter aliases."""
 
@@ -237,8 +296,12 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
                 "emitter_variant": str(row.get("emitter_variant") or ""),
                 "emitter_aliases": list(row.get("matched_aliases") or []),
                 "platform_class": _observation_value(obs, "emission_target_type"),
-                "typical_speed_kt": [0.0, 2500.0],
-                "typical_altitude_m": [0.0, 25000.0],
+                "typical_speed_kt": _kinematic_range(
+                    row, ["max_speed_kt_values", "typical_speed_kt_values", "cruise_speed_kt_values"], 2500.0, ["kt", "kts", "knot", "knots"]
+                ),
+                "typical_altitude_m": _kinematic_range(
+                    row, ["service_ceiling_m_values", "max_altitude_m_values", "typical_altitude_m_values"], 25000.0, ["m", "meter", "meters"]
+                ),
                 "kg_support_count": int(row.get("support_count") or 0),
                 "evidence_paths": row.get("evidence_paths") or [],
                 "semantic_match_score": float(row.get("semantic_match_score") or 0.0),

@@ -51,6 +51,8 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "VARIANT_OF" in query
     assert "semantic_match_score" in query
     assert "matched_tokens" in query
+    assert "MAX_SPEED_KT" in query
+    assert "SERVICE_CEILING_M" in query
     assert params == {
         "emitter_aliases": ["N-010 Zhuk-M"],
         "emitter_semantic_tokens": ["n010", "zhuk"],
@@ -73,6 +75,8 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
                     "support_count": 3,
                     "evidence_paths": [["HAS_SENSOR"]],
                     "semantic_match_score": 0.0,
+                    "max_speed_kt_values": ["Mach 2.25 (1,320 kt)"],
+                    "service_ceiling_m_values": ["57,400 ft (17,500 m)"],
                 }
             ]
         ]
@@ -91,8 +95,8 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
             "emitter_variant": "N-010 Zhuk-ME",
             "emitter_aliases": ["N-010 Zhuk-M"],
             "platform_class": "Type: Multirole (Fighter/Attack)",
-            "typical_speed_kt": [0.0, 2500.0],
-            "typical_altitude_m": [0.0, 25000.0],
+            "typical_speed_kt": [0.0, 1320.0],
+            "typical_altitude_m": [0.0, 17500.0],
             "kg_support_count": 3,
             "evidence_paths": [["HAS_SENSOR"]],
             "semantic_match_score": 0.0,
