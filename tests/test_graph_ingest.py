@@ -61,6 +61,9 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     assert "TYPICAL_SPEED_KT" in prompt
     assert "Emission_latitude" in prompt
     assert "DISTINGUISHES_FROM" in prompt
+    assert "only extract current operating-force or operating-nation relationships" in prompt
+    assert "current operator section" in prompt
+    assert "former operator sections" in prompt
 
 
 def test_extract_facts_emits_chunk_and_parse_diagnostics(monkeypatch, capsys):
