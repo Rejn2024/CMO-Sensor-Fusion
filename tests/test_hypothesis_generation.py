@@ -126,6 +126,43 @@ def test_select_offline_hypotheses_prefers_alias_class_kinematics_and_graph_supp
     assert select_offline_hypotheses(observation, candidates, 1)[0]["hypothesis"] == "MiG-29SMT"
 
 
+def test_select_offline_hypotheses_returns_unique_platform_names():
+    observation = parse_observation_line(SAMPLE, source_line=1)
+    candidates = [
+        {
+            "hypothesis": "MiG-29SMT",
+            "operator_nation": "Russia",
+            "emitter_aliases": ["N-010 Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 2,
+        },
+        {
+            "hypothesis": "MiG-29SMT",
+            "operator_nation": "Ukraine",
+            "emitter_aliases": ["N-010 Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 1,
+        },
+        {
+            "hypothesis": "MiG-35",
+            "operator_nation": "Russia",
+            "emitter_aliases": ["Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 1,
+        },
+    ]
+
+    hypotheses = select_offline_hypotheses(observation, candidates, 3)
+
+    assert [item["hypothesis"] for item in hypotheses] == ["MiG-29SMT", "MiG-35"]
+    assert hypotheses[0]["operator_nation"] == "Russia"
+
 def test_build_llm_hypothesis_prompt_contains_json_contract_and_graph_rows():
     observation = parse_observation_line(SAMPLE, source_line=1)
     prompt = build_llm_hypothesis_prompt(observation, [{"hypothesis": "MiG-29SMT"}], 10)
