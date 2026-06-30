@@ -64,8 +64,9 @@ def platform_operator_nation_distribution(
     """Produce calibrated platform probabilities and marginal operator-nation probabilities.
 
     ``rows`` must describe competing platform-level hypotheses for one contact at
-    one observation time.  Candidate names are read from ``hypothesis`` (or
-    ``platform``/``platform_type``), and operator nation labels are read from
+    one observation time.  Candidate platform names are read from ``hypothesis``
+    (or ``platform``/``platform_type``), and may repeat when rows differ by
+    emitter, operator, or other evidence.  Operator nation labels are read from
     ``operator_nation``/``operator_country``/``nation`` with legacy fallback to
     ``country``/``country_of_origin``/``origin_country``.
     """
@@ -73,21 +74,26 @@ def platform_operator_nation_distribution(
     if not rows:
         raise ValueError("probability model requires at least one candidate row")
     classes = [_text(row, "hypothesis", "platform", "platform_type") for row in rows]
-    if any(not item for item in classes) or len(set(classes)) != len(classes):
-        raise ValueError("candidate rows must have unique platform hypothesis names")
+    if any(not item for item in classes):
+        raise ValueError("candidate rows must include platform hypothesis names")
     logits = [feature_row_to_logit(row) for row in rows]
     if calibrator is None:
-        platform_probs = dict(zip(classes, _softmax(logits, 1.0)))
+        candidate_probabilities = _softmax(logits, 1.0)
         calibration = {"method": "softmax_uncalibrated_baseline"}
     else:
-        if list(calibrator.classes) != classes:
+        if (
+            len(calibrator.classes) == len(classes)
+            and len(set(classes)) == len(classes)
+            and list(calibrator.classes) != classes
+        ):
             raise ValueError("calibrator classes must match grouped platform hypotheses in order")
-        platform_probs = calibrator.calibrate(logits)
+        candidate_probabilities = _softmax(logits, calibrator.temperature)
         calibration = calibrator.to_dict()
 
+    platform_probs: dict[str, float] = defaultdict(float)
     operator_nation_probs: dict[str, float] = defaultdict(float)
     candidates: list[dict[str, object]] = []
-    for row, platform in zip(rows, classes):
+    for candidate_index, (row, platform, probability) in enumerate(zip(rows, classes, candidate_probabilities)):
         operator_nation = _text(
             row,
             "operator_nation",
@@ -98,10 +104,12 @@ def platform_operator_nation_distribution(
             "origin_country",
             default="unknown",
         )
-        probability = float(platform_probs[platform])
+        probability = float(probability)
+        platform_probs[platform] += probability
         operator_nation_probs[operator_nation] += probability
         candidates.append(
             {
+                "candidate_index": candidate_index,
                 "platform": platform,
                 "operator_nation": operator_nation,
                 "probability": probability,
@@ -110,6 +118,7 @@ def platform_operator_nation_distribution(
             }
         )
     candidates.sort(key=lambda item: float(item["probability"]), reverse=True)
+    platform_distribution = dict(sorted(platform_probs.items(), key=lambda item: item[1], reverse=True))
     operator_nation_distribution = dict(sorted(operator_nation_probs.items(), key=lambda item: item[1], reverse=True))
     first = rows[0]
     return {
@@ -121,7 +130,7 @@ def platform_operator_nation_distribution(
         "top_platform_probability": candidates[0]["probability"],
         "top_operator_nation": next(iter(operator_nation_distribution)),
         "top_operator_nation_probability": next(iter(operator_nation_distribution.values())),
-        "platform_probabilities": {str(item["platform"]): item["probability"] for item in candidates},
+        "platform_probabilities": platform_distribution,
         "operator_nation_probabilities": operator_nation_distribution,
         "candidates": candidates,
         "calibration": calibration,

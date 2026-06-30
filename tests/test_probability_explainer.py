@@ -49,6 +49,29 @@ def test_platform_operator_nation_distribution_assigns_platform_and_origin_proba
     assert result["candidates"][0]["evidence_query_id"] == "q1"
 
 
+def test_platform_operator_nation_distribution_allows_repeated_platform_names():
+    rows = candidate_rows() + [
+        {
+            **candidate_rows()[0],
+            "operator_nation": "Russia",
+            "supporting_path_count": 2,
+            "evidence_query_id": "q3",
+        }
+    ]
+
+    result = platform_operator_nation_distribution(rows)
+
+    assert len(result["candidates"]) == 3
+    assert {candidate["candidate_index"] for candidate in result["candidates"]} == {0, 1, 2}
+    assert sum(candidate["probability"] for candidate in result["candidates"]) == pytest.approx(1.0)
+    assert result["platform_probabilities"]["Su-27SM"] == pytest.approx(
+        sum(candidate["probability"] for candidate in result["candidates"] if candidate["platform"] == "Su-27SM")
+    )
+    assert result["operator_nation_probabilities"]["Russia"] == pytest.approx(
+        next(candidate["probability"] for candidate in result["candidates"] if candidate["evidence_query_id"] == "q3")
+    )
+
+
 def test_group_feature_rows_groups_by_contact_time():
     rows = candidate_rows() + [{**candidate_rows()[0], "contact_id": "c2"}]
 
