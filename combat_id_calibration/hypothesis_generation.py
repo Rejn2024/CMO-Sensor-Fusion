@@ -92,11 +92,21 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
     OPTIONAL MATCH platform_path = (emitter)-[*1..3]-(platform)
     WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
+    OPTIONAL MATCH (platform)-[:VARIANT_OF|HAS_VARIANT|AIRCRAFT_FAMILY*0..1]-(aircraft_variant)
+    WHERE aircraft_variant IS NULL OR any(label IN labels(aircraft_variant) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
+    OPTIONAL MATCH (emitter)-[:VARIANT_OF|HAS_VARIANT|ALSO_KNOWN_AS*0..1]-(emitter_variant)
+    WHERE emitter_variant IS NULL OR any(label IN labels(emitter_variant) WHERE label IN ['Sensor', 'Entity'])
     OPTIONAL MATCH (platform)-[:OPERATED_BY|OPERATOR|USED_BY|SERVICE_WITH|ASSIGNED_TO]-(operator)
-    WITH emitter, platform, operator, platform_path, exact_aliases, matched_tokens
+    OPTIONAL MATCH (platform)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY]-(operator_country)
+    OPTIONAL MATCH (operator)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY|LOCATED_IN]-(operator_country_via_operator)
+    WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
     WITH coalesce(platform.name, platform.id, platform.title) AS hypothesis,
-         coalesce(operator.name, operator.id, operator.title, 'Unknown') AS operator_nation,
+         coalesce(aircraft_variant.name, aircraft_variant.id, aircraft_variant.title, platform.name, platform.id, platform.title) AS aircraft_variant,
+         coalesce(emitter_variant.name, emitter_variant.id, emitter_variant.title, emitter.name, emitter.id, emitter.title) AS emitter_variant,
+         coalesce(operator_country.name, operator_country.id, operator_country.title,
+                  operator_country_via_operator.name, operator_country_via_operator.id, operator_country_via_operator.title,
+                  operator.name, operator.id, operator.title, 'Unknown') AS operator_nation,
          collect(DISTINCT coalesce(emitter.name, emitter.id, emitter.title)) AS matched_aliases,
          count(DISTINCT platform_path) AS support_count,
          collect(DISTINCT [rel IN relationships(platform_path) | type(rel)]) AS evidence_paths,
@@ -104,12 +114,14 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
          max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score
     RETURN hypothesis,
            operator_nation,
+           aircraft_variant,
+           emitter_variant,
            matched_aliases,
            support_count,
            evidence_paths,
            platform_labels,
            semantic_match_score
-    ORDER BY semantic_match_score DESC, support_count DESC, hypothesis ASC, operator_nation ASC
+    ORDER BY semantic_match_score DESC, support_count DESC, hypothesis ASC, operator_nation ASC, aircraft_variant ASC, emitter_variant ASC
     LIMIT $limit
     """
     semantic_tokens = emitter_semantic_tokens(aliases)
@@ -221,6 +233,8 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
             {
                 "hypothesis": hypothesis,
                 "operator_nation": str(row.get("operator_nation") or "Unknown"),
+                "aircraft_variant": str(row.get("aircraft_variant") or hypothesis),
+                "emitter_variant": str(row.get("emitter_variant") or ""),
                 "emitter_aliases": list(row.get("matched_aliases") or []),
                 "platform_class": _observation_value(obs, "emission_target_type"),
                 "typical_speed_kt": [0.0, 2500.0],
@@ -283,12 +297,13 @@ def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], cand
 
     ranked = sorted(candidates, key=score, reverse=True)
     selected: list[dict[str, object]] = []
-    seen_hypotheses: set[str] = set()
+    seen_hypotheses: set[tuple[str, str, str, str]] = set()
     for candidate in ranked:
         hypothesis = str(candidate.get("hypothesis") or "").strip()
-        if not hypothesis or hypothesis in seen_hypotheses:
+        identity = _hypothesis_identity(candidate)
+        if not hypothesis or identity in seen_hypotheses:
             continue
-        seen_hypotheses.add(hypothesis)
+        seen_hypotheses.add(identity)
         selected.append(dict(candidate))
         if len(selected) >= n:
             break
@@ -315,6 +330,18 @@ def _observation_dict(obs: EmissionObservation | Mapping[str, Any]) -> dict[str,
 def _observation_value(obs: EmissionObservation | Mapping[str, Any], key: str) -> str:
     value = getattr(obs, key) if is_dataclass(obs) else obs.get(key)
     return "" if value is None else str(value)
+
+
+def _hypothesis_identity(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """Return the fields that distinguish a graph candidate hypothesis."""
+
+    hypothesis = str(candidate.get("hypothesis") or "").strip()
+    return (
+        hypothesis,
+        str(candidate.get("operator_nation") or "").strip(),
+        str(candidate.get("aircraft_variant") or hypothesis).strip(),
+        str(candidate.get("emitter_variant") or "").strip(),
+    )
 
 
 def _optional_float(value: object) -> float | None:

@@ -47,6 +47,8 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "$limit" in query
     assert "Platform" in query
     assert "OPERATED_BY" in query
+    assert "OPERATOR_COUNTRY" in query
+    assert "VARIANT_OF" in query
     assert "semantic_match_score" in query
     assert "matched_tokens" in query
     assert params == {
@@ -65,6 +67,8 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
                 {
                     "hypothesis": "MiG-29SMT",
                     "operator_nation": "Russia",
+                    "aircraft_variant": "MiG-29SMT",
+                    "emitter_variant": "N-010 Zhuk-ME",
                     "matched_aliases": ["N-010 Zhuk-M"],
                     "support_count": 3,
                     "evidence_paths": [["HAS_SENSOR"]],
@@ -83,6 +87,8 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
         {
             "hypothesis": "MiG-29SMT",
             "operator_nation": "Russia",
+            "aircraft_variant": "MiG-29SMT",
+            "emitter_variant": "N-010 Zhuk-ME",
             "emitter_aliases": ["N-010 Zhuk-M"],
             "platform_class": "Type: Multirole (Fighter/Attack)",
             "typical_speed_kt": [0.0, 2500.0],
@@ -126,12 +132,14 @@ def test_select_offline_hypotheses_prefers_alias_class_kinematics_and_graph_supp
     assert select_offline_hypotheses(observation, candidates, 1)[0]["hypothesis"] == "MiG-29SMT"
 
 
-def test_select_offline_hypotheses_returns_unique_platform_names():
+def test_select_offline_hypotheses_returns_unique_graph_combinations():
     observation = parse_observation_line(SAMPLE, source_line=1)
     candidates = [
         {
             "hypothesis": "MiG-29SMT",
             "operator_nation": "Russia",
+            "aircraft_variant": "MiG-29SMT",
+            "emitter_variant": "N-010 Zhuk-M",
             "emitter_aliases": ["N-010 Zhuk-M"],
             "platform_class": "Type: Multirole (Fighter/Attack)",
             "typical_speed_kt": [300, 900],
@@ -141,6 +149,8 @@ def test_select_offline_hypotheses_returns_unique_platform_names():
         {
             "hypothesis": "MiG-29SMT",
             "operator_nation": "Ukraine",
+            "aircraft_variant": "MiG-29SMT",
+            "emitter_variant": "N-010 Zhuk-M",
             "emitter_aliases": ["N-010 Zhuk-M"],
             "platform_class": "Type: Multirole (Fighter/Attack)",
             "typical_speed_kt": [300, 900],
@@ -150,6 +160,8 @@ def test_select_offline_hypotheses_returns_unique_platform_names():
         {
             "hypothesis": "MiG-35",
             "operator_nation": "Russia",
+            "aircraft_variant": "MiG-35",
+            "emitter_variant": "Zhuk-M",
             "emitter_aliases": ["Zhuk-M"],
             "platform_class": "Type: Multirole (Fighter/Attack)",
             "typical_speed_kt": [300, 900],
@@ -160,8 +172,40 @@ def test_select_offline_hypotheses_returns_unique_platform_names():
 
     hypotheses = select_offline_hypotheses(observation, candidates, 3)
 
-    assert [item["hypothesis"] for item in hypotheses] == ["MiG-29SMT", "MiG-35"]
+    assert [item["hypothesis"] for item in hypotheses].count("MiG-29SMT") == 2
+    assert [item["hypothesis"] for item in hypotheses].count("MiG-35") == 1
     assert hypotheses[0]["operator_nation"] == "Russia"
+    assert {item["operator_nation"] for item in hypotheses if item["hypothesis"] == "MiG-29SMT"} == {"Russia", "Ukraine"}
+
+
+def test_select_offline_hypotheses_deduplicates_identical_graph_combinations():
+    observation = parse_observation_line(SAMPLE, source_line=1)
+    candidates = [
+        {
+            "hypothesis": "MiG-29SMT",
+            "operator_nation": "Russia",
+            "aircraft_variant": "MiG-29SMT",
+            "emitter_variant": "N-010 Zhuk-M",
+            "emitter_aliases": ["N-010 Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 2,
+        },
+        {
+            "hypothesis": "MiG-29SMT",
+            "operator_nation": "Russia",
+            "aircraft_variant": "MiG-29SMT",
+            "emitter_variant": "N-010 Zhuk-M",
+            "emitter_aliases": ["N-010 Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 1,
+        },
+    ]
+
+    assert len(select_offline_hypotheses(observation, candidates, 3)) == 1
 
 def test_build_llm_hypothesis_prompt_contains_json_contract_and_graph_rows():
     observation = parse_observation_line(SAMPLE, source_line=1)
