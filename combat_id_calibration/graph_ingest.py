@@ -197,8 +197,50 @@ def ollama_generate(prompt: str, model: str = DEFAULT_MODEL, ollama_url: str = D
     return _ollama_response_text(data)
 
 
-def build_extraction_prompt(document: SourceDocument, chunk: str) -> str:
+def _reference_aircraft_section(known_aircraft: Sequence[str] | None) -> str:
+    """Format optional platform-name guardrails for the extraction prompt."""
+
+    names = [name.strip() for name in known_aircraft or [] if name and name.strip()]
+    if not names:
+        return ""
+    aircraft_lines = "\n".join(f"- {name}" for name in names)
+    return f"""
+Known aircraft platform reference list:
+{aircraft_lines}
+
+Platform-labeling guardrails:
+- Treat the known aircraft platform reference list as positive evidence for aircraft/platform identity.
+- Before emitting PLATFORM_TYPE, AIRCRAFT_FAMILY, HAS_PLATFORM, VARIANT_OF, HAS_VARIANT, or any fact that would cause an entity to be modeled as a Platform, cross-check whether that entity is a vehicle, vessel, or base system that transports, powers, and deploys weapons, sensors, or personnel.
+- Prefer platform facts only when the entity is in the known aircraft list, is explicitly described by the source as an aircraft/ship/vehicle/base, or is explicitly named as a host platform.
+- Do not classify radar families, emitters, sensors, missiles, weapons, subsystems, or designation-only radar names as platforms merely because they are associated with an aircraft. For example, Zhuk should remain a radar/emitter unless the source explicitly identifies a host aircraft platform.
+"""
+
+
+def read_known_aircraft(path: str | Path) -> list[str]:
+    """Read newline, JSON-array, or CSV-style aircraft names for prompt guardrails."""
+
+    text = Path(path).read_text(encoding="utf-8")
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        data = json.loads(stripped)
+        if not isinstance(data, list):
+            raise ValueError("known aircraft JSON must be an array of names")
+        return [str(item).strip() for item in data if str(item).strip()]
+    names: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        names.append(line.split(",", 1)[0].strip())
+    return [name for name in names if name]
+
+
+def build_extraction_prompt(document: SourceDocument, chunk: str, known_aircraft: Sequence[str] | None = None) -> str:
     """Build a CMO-emission-aware prompt for extracting auditable graph triples."""
+
+    aircraft_reference = _reference_aircraft_section(known_aircraft)
 
     return f"""You extract a broad, varied set of knowledge-graph facts for a combat-identification evidence graph about aircraft, radars, emitters, operators, kinematics, and geography.
 
@@ -248,6 +290,7 @@ Rules:
 - Do not emit duplicate facts or vague facts whose object is only "information", "context", or "data".
 - Use confidence from 0.0 to 1.0 based only on how explicit the source chunk is.
 
+{aircraft_reference}
 Source title: {document.title}
 Source type: {document.source_type}
 Source locator: {document.locator}
@@ -399,6 +442,7 @@ def extract_facts(
     max_chars: int = 2000,
     overlap: int = 200,
     diagnostics: bool = True,
+    known_aircraft: Sequence[str] | None = None,
 ) -> list[ExtractedFact]:
     """Extract graph facts from source documents with a local Ollama model."""
 
@@ -427,7 +471,7 @@ def extract_facts(
                 diagnostics,
                 f"document {document_count} chunk {chunk_index}/{len(chunks)}: sending {len(chunk)} chars to Ollama",
             )
-            response = ollama_generate(build_extraction_prompt(document, chunk), model=model, ollama_url=ollama_url)
+            response = ollama_generate(build_extraction_prompt(document, chunk, known_aircraft), model=model, ollama_url=ollama_url)
             preview = response[:300].replace("\n", "\\n")
             _emit_diagnostic(
                 diagnostics,
@@ -669,6 +713,10 @@ def add_ingest_parser(commands: argparse._SubParsersAction[argparse.ArgumentPars
     parser.add_argument("--max-chars", type=int, default=6000, help="maximum characters per LLM chunk")
     parser.add_argument("--overlap", type=int, default=500, help="overlap characters between chunks")
     parser.add_argument("--quiet-extraction", action="store_true", help="suppress fact-extraction diagnostics on stderr")
+    parser.add_argument(
+        "--known-aircraft",
+        help="optional newline, CSV, or JSON-array file of aircraft names to cross-check before platform extraction",
+    )
 
 
 def run_ingest_command(args: argparse.Namespace) -> None:
@@ -677,6 +725,7 @@ def run_ingest_command(args: argparse.Namespace) -> None:
     documents = load_documents(args.pdf, args.wikipedia)
     if not documents:
         raise ValueError("provide at least one --pdf or --wikipedia source")
+    known_aircraft = read_known_aircraft(args.known_aircraft) if args.known_aircraft else None
     facts = extract_facts(
         documents,
         model=args.model,
@@ -684,6 +733,7 @@ def run_ingest_command(args: argparse.Namespace) -> None:
         max_chars=args.max_chars,
         overlap=args.overlap,
         diagnostics=not args.quiet_extraction,
+        known_aircraft=known_aircraft,
     )
     if args.facts_jsonl:
         write_facts_jsonl(facts, args.facts_jsonl)
