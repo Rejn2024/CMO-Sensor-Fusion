@@ -4,6 +4,7 @@ from combat_id_calibration.cmo_observation_ingest import parse_observation_line
 from combat_id_calibration.hypothesis_generation import (
     build_llm_hypothesis_prompt,
     emitter_aliases,
+    evidence_paths_query_id,
     emitter_semantic_tokens,
     fetch_graph_hypotheses_with_session,
     graph_hypothesis_query,
@@ -91,6 +92,12 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
             "semantic_match_score": 0.0,
         }
     ]
+
+
+def test_evidence_paths_query_id_handles_nested_graph_paths_and_seed_strings():
+    assert evidence_paths_query_id([["HAS_SENSOR"], ["DETECTED_BY", "OPERATED_BY"]]) == "HAS_SENSOR|DETECTED_BY>OPERATED_BY"
+    assert evidence_paths_query_id(["offline_seed"]) == "offline_seed"
+    assert evidence_paths_query_id("") == ""
 
 
 def test_probe_knowledge_graph_with_session_reports_alias_node_and_neighbour_rows():

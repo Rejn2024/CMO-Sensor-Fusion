@@ -165,6 +165,33 @@ def graph_probe_queries(aliases: Sequence[str]) -> list[tuple[str, str, dict[str
     ]
 
 
+def evidence_paths_query_id(evidence_paths: object) -> str:
+    """Return a stable text identifier for graph evidence paths.
+
+    Neo4j evidence-path rows are often lists of relationship-type lists, while
+    offline seed rows may already be strings.  Notebook feature rows need a
+    scalar ``evidence_query_id`` value, so normalize both shapes without
+    assuming every path item is directly joinable as text.
+    """
+
+    if not evidence_paths:
+        return ""
+    if isinstance(evidence_paths, str):
+        return evidence_paths
+    if not isinstance(evidence_paths, Iterable):
+        return str(evidence_paths)
+
+    normalized: list[str] = []
+    for path in evidence_paths:
+        if isinstance(path, str):
+            normalized.append(path)
+        elif isinstance(path, Iterable):
+            normalized.append(">".join(str(segment) for segment in path))
+        else:
+            normalized.append(str(path))
+    return "|".join(item for item in normalized if item)
+
+
 def _rows(result: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [dict(row) for row in result]
 
