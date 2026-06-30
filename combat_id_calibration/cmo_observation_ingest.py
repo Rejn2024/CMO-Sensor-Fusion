@@ -3,7 +3,7 @@
 The Lua exporter emits text lines beginning with ``PY_CONTACT_LOG`` followed by
 comma-separated ``key : value`` fields.  These records are observations in the
 Phase-2 graph-database layer from ``GraphDB_Probability_Architecture_Seed.txt``:
-they preserve timestamped source evidence, contact/emission/sensor context,
+they preserve timestamped source evidence, observer/emitter context,
 kinematics, and classification attributes for downstream feature extraction.
 """
 
@@ -20,7 +20,7 @@ from typing import Iterable, Iterator, Sequence
 from .graph_ingest import _neo4j_connection_error_message, _validate_neo4j_credentials, stable_id
 
 LOG_PREFIX = "PY_CONTACT_LOG"
-OBSERVATION_SCHEMA = "cmo_emission_observation_v1"
+OBSERVATION_SCHEMA = "cmo_emission_observation_v2"
 
 _FIELD_RE = re.compile(r"\s*([^:,]+?)\s*:\s*(.*?)\s*(?=\s*,\s*[^:,]+?\s*:|\s*$)")
 
@@ -161,7 +161,7 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
 
     contact_name = f"Contact observed at {observation.time} by {observation.sensor_aircraft}"
     contact_id = stable_id("contact", observation.observation_id)
-    sensor_id = stable_id("sensor", observation.emission_sensor_name.lower())
+    emitter_sensor_id = stable_id("sensor", observation.emission_sensor_name.lower())
     platform_id = stable_id("platform", observation.sensor_aircraft.lower())
     emission_id = stable_id("emission", observation.observation_id, observation.emission_sensor_name.lower())
     class_id = stable_id("platform-class", observation.emission_target_type.lower()) if observation.emission_target_type else ""
@@ -178,15 +178,17 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
               obs.classification_level = $emission_classificationlevel
         MERGE (contact:Contact {id: $contact_id}) SET contact.name = $contact_name
         MERGE (platform:Platform {id: $platform_id}) SET platform.name = $sensor_aircraft
-        MERGE (sensor:Sensor {id: $sensor_id}) SET sensor.name = $emission_sensor_name
+        MERGE (emitter_sensor:Sensor {id: $emitter_sensor_id})
+          SET emitter_sensor.name = $emission_sensor_name, emitter_sensor.role = "emitter"
         MERGE (emission:Emission {id: $emission_id})
           SET emission.sensor_name = $emission_sensor_name, emission.type = $emission_type, emission.role = $emission_role
         MERGE (source:Source {id: $source_id}) SET source.source_type = $source, source.locator = $source_locator
         MERGE (contact)-[:HAS_OBSERVATION]->(obs)
         MERGE (obs)-[:OBSERVED_BY]->(platform)
-        MERGE (platform)-[:HAS_SENSOR]->(sensor)
         MERGE (contact)-[:EMITTED]->(emission)
-        MERGE (emission)-[:DETECTED_BY]->(sensor)
+        MERGE (contact)-[:HAS_EMITTER]->(emitter_sensor)
+        MERGE (emission)-[:EMITTED_BY]->(emitter_sensor)
+        MERGE (emission)-[:DETECTED_BY_PLATFORM]->(platform)
         MERGE (obs)-[:DERIVED_FROM]->(source)
         WITH obs, contact
         CALL {
@@ -199,7 +201,7 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
         **asdict(observation),
         contact_id=contact_id,
         contact_name=contact_name,
-        sensor_id=sensor_id,
+        emitter_sensor_id=emitter_sensor_id,
         platform_id=platform_id,
         emission_id=emission_id,
         class_id=class_id,

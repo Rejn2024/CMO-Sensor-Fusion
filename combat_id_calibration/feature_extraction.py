@@ -129,7 +129,7 @@ MATCH (contact:Contact {id: $contact_id})
 OPTIONAL MATCH support_path = (contact)-[*1..4]-(hypothesis)
 WHERE any(label IN labels(hypothesis) WHERE label IN ['Entity', 'PlatformClass', 'CandidateIdentity'])
   AND coalesce(properties(hypothesis)['name'], properties(hypothesis)['id']) = $hypothesis
-  AND any(rel IN relationships(support_path) WHERE type(rel) IN ['SUPPORTS', 'FACT', 'CLASSIFIED_AS', 'EMITTED', 'DETECTED_BY'])
+  AND any(rel IN relationships(support_path) WHERE type(rel) IN ['SUPPORTS', 'FACT', 'CLASSIFIED_AS', 'EMITTED', 'HAS_EMITTER', 'EMITTED_BY', 'DETECTED_BY_PLATFORM'])
 OPTIONAL MATCH contradict_path = (contact)-[*1..4]-(contradiction)
 WHERE any(label IN labels(contradiction) WHERE label IN ['Entity', 'PlatformClass', 'CandidateIdentity'])
   AND any(rel IN relationships(contradict_path) WHERE type(rel) IN ['CONTRADICTS'] OR coalesce(properties(rel)['predicate'], '') STARTS WITH 'CONTRADICT')
