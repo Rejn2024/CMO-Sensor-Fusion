@@ -59,6 +59,9 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     assert "Aim for 8-20 diverse facts" in prompt
     assert "Cover different subjects" in prompt
     assert "TYPICAL_SPEED_KT" in prompt
+    assert "MAX_SPEED_KT" in prompt
+    assert "SERVICE_CEILING_M" in prompt
+    assert "maximum aircraft performance values" in prompt
     assert "Emission_latitude" in prompt
     assert "DISTINGUISHES_FROM" in prompt
     assert "only extract current operating-force or operating-nation relationships" in prompt
