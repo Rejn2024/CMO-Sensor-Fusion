@@ -64,13 +64,13 @@ A companion notebook, [`notebooks/wikipedia_airborne_radars_neo4j_kg.ipynb`](not
 
 ### CMO emission-observation ingestion
 
-`event_export_lua_02.lua` emits `PY_CONTACT_LOG` lines that are treated as Phase-2 graph observations. The `ingest-cmo-observations` command parses each line into a typed ontology and writes it into the same Neo4j database used by the Wikipedia airborne-radar notebook. This route keeps static reference facts from Wikipedia and dynamic CMO observations in one evidence graph: Wikipedia-derived `Entity`/`FACT` records can support candidate identity hypotheses, while CMO-derived `Observation`, `Contact`, `Sensor`, `Emission`, `Platform`, and `PlatformClass` records provide timestamped operational evidence.
+`event_export_lua_02.lua` emits `PY_CONTACT_LOG` lines that are treated as Phase-2 graph observations. The `ingest-cmo-observations` command parses each line into a typed ontology and writes it into the same Neo4j database used by the Wikipedia airborne-radar notebook. This route keeps static reference facts from Wikipedia and dynamic CMO observations in one evidence graph: Wikipedia-derived `Entity`/`FACT` records can support candidate identity hypotheses, while CMO-derived `Observation`, `Contact`, emitter `Sensor`, `Emission`, observing `Platform`, and `PlatformClass` records provide timestamped operational evidence.
 
 The observation ontology maps the Lua fields as follows:
 
 - `Time` -> `Observation.time`
-- `Sensor_aircraft` -> `Platform` connected by `(:Observation)-[:OBSERVED_BY]->(:Platform)`
-- `Emission_sensor_name` -> `Sensor` and `Emission` connected by `HAS_SENSOR`, `EMITTED`, and `DETECTED_BY`
+- `Sensor_aircraft` -> observing `Platform` connected by `(:Observation)-[:OBSERVED_BY]->(:Platform)`; this platform is the aircraft that detected the emission, not necessarily the host of the emitter
+- `Emission_sensor_name` -> emitter `Sensor` and `Emission` connected by `HAS_EMITTER`, `EMITTED`, `EMITTED_BY`, and `DETECTED_BY_PLATFORM`; ingestion intentionally does not create a `(:Platform)-[:HAS_SENSOR]->(:Sensor)` edge from the observing aircraft to the emitter
 - `Emission_age`, `Emission_solid`, latitude, longitude, heading, altitude, and speed -> `Observation` kinematic/evidence properties
 - `Emission_type` and `Emission_role` -> `Emission` properties
 - `Emission_target_type` and `Emission_classificationlevel` -> `PlatformClass` plus `CLASSIFIED_AS` evidence
