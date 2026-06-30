@@ -297,10 +297,10 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
                 "emitter_aliases": list(row.get("matched_aliases") or []),
                 "platform_class": _observation_value(obs, "emission_target_type"),
                 "typical_speed_kt": _kinematic_range(
-                    row, ["max_speed_kt_values", "typical_speed_kt_values", "cruise_speed_kt_values"], 2500.0, ["kt", "kts", "knot", "knots"]
+                    row, ["max_speed_kt_values", "typical_speed_kt_values", "cruise_speed_kt_values"], float('nan'), ["kt", "kts", "knot", "knots"]
                 ),
                 "typical_altitude_m": _kinematic_range(
-                    row, ["service_ceiling_m_values", "max_altitude_m_values", "typical_altitude_m_values"], 25000.0, ["m", "meter", "meters"]
+                    row, ["service_ceiling_m_values", "max_altitude_m_values", "typical_altitude_m_values"], float('nan'), ["m", "meter", "meters"]
                 ),
                 "kg_support_count": int(row.get("support_count") or 0),
                 "evidence_paths": row.get("evidence_paths") or [],
