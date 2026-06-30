@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .io import write_jsonl
+from .probability_model import _is_unknown_operator_nation, _top_positive_operator_nation
 
 EXPLANATION_SCHEMA = "llm_explainer_payload_v1"
 
@@ -40,10 +41,24 @@ def build_explanation_payload(probability_record: Mapping[str, object], evidence
     evidence = evidence or {}
     top_platform = probability_record.get("top_platform")
     top_platform_probability = float(probability_record.get("top_platform_probability", 0.0))
-    top_operator_nation = probability_record.get("top_operator_nation") or probability_record.get("top_country_of_origin")
-    top_operator_nation_probability = float(
-        probability_record.get("top_operator_nation_probability", probability_record.get("top_country_probability", 0.0))
+    operator_nation_probabilities = probability_record.get(
+        "operator_nation_probabilities", probability_record.get("country_probabilities", {})
     )
+    if not isinstance(operator_nation_probabilities, Mapping):
+        operator_nation_probabilities = {}
+    positive_operator_nation_probabilities = {
+        str(operator_nation): float(probability)
+        for operator_nation, probability in operator_nation_probabilities.items()
+        if not _is_unknown_operator_nation(operator_nation)
+    }
+    recorded_top_operator_nation = probability_record.get("top_operator_nation") or probability_record.get("top_country_of_origin")
+    if recorded_top_operator_nation and not _is_unknown_operator_nation(recorded_top_operator_nation):
+        top_operator_nation = recorded_top_operator_nation
+        top_operator_nation_probability = float(
+            probability_record.get("top_operator_nation_probability", probability_record.get("top_country_probability", 0.0))
+        )
+    else:
+        top_operator_nation, top_operator_nation_probability = _top_positive_operator_nation(positive_operator_nation_probabilities)
     support = _items(evidence.get("supporting_evidence") or probability_record.get("supporting_evidence"))
     contradict = _items(evidence.get("contradicting_evidence") or probability_record.get("contradicting_evidence"))
     missing = _items(evidence.get("missing_evidence") or probability_record.get("missing_evidence"))
@@ -54,6 +69,10 @@ def build_explanation_payload(probability_record: Mapping[str, object], evidence
         probs = sorted((probability_record.get("platform_probabilities") or {}).values(), reverse=True)
         if len(probs) > 1 and float(probs[0]) - float(probs[1]) < 0.15:
             uncertainty.append("The two leading platform hypotheses are separated by less than 0.15 probability.")
+    if len(positive_operator_nation_probabilities) != len(operator_nation_probabilities):
+        uncertainty.append(
+            "Non-identifying operator-nation labels were excluded; the summary uses the highest-probability positive operator-nation candidate."
+        )
     summary = (
         f"Most likely emitter platform is {top_platform} with probability {top_platform_probability:.3f}; "
         f"most likely operator nation is {top_operator_nation} with probability {top_operator_nation_probability:.3f}."
@@ -62,7 +81,7 @@ def build_explanation_payload(probability_record: Mapping[str, object], evidence
         "Explain the supplied calibrated combat-identification probabilities without changing them.",
         summary,
         f"Platform distribution: {json.dumps(probability_record.get('platform_probabilities', {}), sort_keys=True)}",
-        f"Operator-nation distribution: {json.dumps(probability_record.get('operator_nation_probabilities', probability_record.get('country_probabilities', {})), sort_keys=True)}",
+        f"Operator-nation distribution (positive labels only): {json.dumps(positive_operator_nation_probabilities, sort_keys=True)}",
         "Supporting evidence:",
         *(_evidence_lines(support, "  ") or ["  none supplied"]),
         "Contradicting evidence:",
