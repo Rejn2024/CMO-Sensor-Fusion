@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -20,7 +21,15 @@ from .graph_ingest import _neo4j_connection_error_message, _validate_neo4j_crede
 
 
 def emitter_aliases(sensor_name: str) -> list[str]:
-    """Return normalized aliases for a CMO emission sensor string."""
+    """Return normalized aliases for a CMO emission sensor string.
+
+    CMO sensor labels often mix NATO reporting names with bracketed model
+    designators, punctuation, and variant suffixes.  The graph may store a
+    related sensor under a nearby canonical name (for example ``N010 Zhuk``
+    rather than ``Slot Back [N-010 Zhuk-M]``), so expose both exact label
+    fragments and semantic search forms that preserve the meaningful model and
+    family tokens.
+    """
 
     text = sensor_name.strip()
     aliases: list[str] = []
@@ -30,11 +39,43 @@ def emitter_aliases(sensor_name: str) -> list[str]:
             bracketed = text.split("[", 1)[1].split("]", 1)[0].strip()
             prefix = text.split("[", 1)[0].strip()
             aliases.extend(part.strip() for part in (bracketed, prefix) if part.strip())
+            aliases.extend(_semantic_alias_variants(bracketed))
+        aliases.extend(_semantic_alias_variants(text))
     deduped: list[str] = []
     for alias in aliases:
-        if alias.lower() not in {existing.lower() for existing in deduped}:
+        if alias and alias.lower() not in {existing.lower() for existing in deduped}:
             deduped.append(alias)
     return deduped
+
+
+def emitter_semantic_tokens(aliases: Sequence[str]) -> list[str]:
+    """Return stable tokens used for semantic emitter-name matching."""
+
+    tokens: list[str] = []
+    for alias in aliases:
+        for token in re.findall(r"[a-z0-9]+", alias.lower().replace("n-", "n")):
+            if len(token) > 1 and token not in tokens:
+                tokens.append(token)
+    return tokens
+
+
+def _semantic_alias_variants(text: str) -> list[str]:
+    normalized = re.sub(r"(?i)\bn[-\s]?(\d+)", r"N\1", text)
+    normalized = re.sub(r"[\[\]]", " ", normalized)
+    compact = re.sub(r"[-_/]+", " ", normalized)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    variants = [compact] if compact and compact != text else []
+    # Variant suffixes such as -M/-ME/-AE are often omitted in canonical KG
+    # sensor names; keep a family-level alias as a semantic backoff.
+    family = re.sub(r"(?i)\b(N\d+\s+\S+?)(?:\s+[A-Z]{1,3})$", r"\1", compact)
+    if family != compact:
+        variants.append(family)
+    words = compact.split()
+    if len(words) >= 2:
+        variants.append(" ".join(words[-2:]))
+    if words and len(words[-1]) > 1:
+        variants.append(words[-1])
+    return variants
 
 
 def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dict[str, object]]:
@@ -42,42 +83,62 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
 
     query = """
     MATCH (emitter)
-    WHERE any(alias IN $emitter_aliases WHERE
-      toLower(coalesce(emitter.name, emitter.id, emitter.title, '')) CONTAINS toLower(alias)
-      OR toLower(alias) CONTAINS toLower(coalesce(emitter.name, emitter.id, emitter.title, '')))
+    WITH emitter, toLower(coalesce(emitter.name, emitter.id, emitter.title, '')) AS emitter_name
+    WITH emitter, emitter_name,
+         reduce(normalized = emitter_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_emitter_name
+    WITH emitter, emitter_name, normalized_emitter_name,
+         [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
+         [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
+    WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
     OPTIONAL MATCH platform_path = (emitter)-[*1..3]-(platform)
     WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
     OPTIONAL MATCH (platform)-[:OPERATED_BY|OPERATOR|USED_BY|SERVICE_WITH|ASSIGNED_TO]-(operator)
-    WITH emitter, platform, operator, platform_path
+    WITH emitter, platform, operator, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
     WITH coalesce(platform.name, platform.id, platform.title) AS hypothesis,
          coalesce(operator.name, operator.id, operator.title, 'Unknown') AS operator_nation,
          collect(DISTINCT coalesce(emitter.name, emitter.id, emitter.title)) AS matched_aliases,
          count(DISTINCT platform_path) AS support_count,
          collect(DISTINCT [rel IN relationships(platform_path) | type(rel)]) AS evidence_paths,
-         labels(platform) AS platform_labels
+         labels(platform) AS platform_labels,
+         max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score
     RETURN hypothesis,
            operator_nation,
            matched_aliases,
            support_count,
            evidence_paths,
-           platform_labels
-    ORDER BY support_count DESC, hypothesis ASC, operator_nation ASC
+           platform_labels,
+           semantic_match_score
+    ORDER BY semantic_match_score DESC, support_count DESC, hypothesis ASC, operator_nation ASC
     LIMIT $limit
     """
-    return query, {"emitter_aliases": list(aliases), "limit": int(limit)}
+    semantic_tokens = emitter_semantic_tokens(aliases)
+    return query, {
+        "emitter_aliases": list(aliases),
+        "emitter_semantic_tokens": semantic_tokens,
+        "minimum_semantic_token_matches": min(2, len(semantic_tokens)) if semantic_tokens else 1,
+        "limit": int(limit),
+    }
 
 
 def graph_probe_queries(aliases: Sequence[str]) -> list[tuple[str, str, dict[str, object]]]:
     """Return named diagnostic Cypher probes for inspecting graph coverage."""
 
-    params = {"emitter_aliases": list(aliases)}
+    semantic_tokens = emitter_semantic_tokens(aliases)
+    params = {
+        "emitter_aliases": list(aliases),
+        "emitter_semantic_tokens": semantic_tokens,
+        "minimum_semantic_token_matches": min(2, len(semantic_tokens)) if semantic_tokens else 1,
+    }
     return [
         (
             "alias_nodes",
             """
             MATCH (node)
-            WHERE any(alias IN $emitter_aliases WHERE toLower(coalesce(node.name, node.id, node.title, '')) CONTAINS toLower(alias))
+            WITH node, toLower(coalesce(node.name, node.id, node.title, '')) AS node_name
+            WITH node, node_name, reduce(normalized = node_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_node_name
+            WHERE any(alias IN $emitter_aliases WHERE node_name CONTAINS toLower(alias))
+               OR size([token IN $emitter_semantic_tokens WHERE normalized_node_name CONTAINS token]) >= $minimum_semantic_token_matches
             RETURN labels(node) AS labels, coalesce(node.name, node.id, node.title) AS name
             ORDER BY name
             LIMIT 25
@@ -88,7 +149,10 @@ def graph_probe_queries(aliases: Sequence[str]) -> list[tuple[str, str, dict[str
             "alias_neighbours",
             """
             MATCH (node)-[rel]-(neighbour)
-            WHERE any(alias IN $emitter_aliases WHERE toLower(coalesce(node.name, node.id, node.title, '')) CONTAINS toLower(alias))
+            WITH node, rel, neighbour, toLower(coalesce(node.name, node.id, node.title, '')) AS node_name
+            WITH node, rel, neighbour, node_name, reduce(normalized = node_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_node_name
+            WHERE any(alias IN $emitter_aliases WHERE node_name CONTAINS toLower(alias))
+               OR size([token IN $emitter_semantic_tokens WHERE normalized_node_name CONTAINS token]) >= $minimum_semantic_token_matches
             RETURN coalesce(node.name, node.id, node.title) AS alias_node,
                    type(rel) AS relationship,
                    labels(neighbour) AS neighbour_labels,
@@ -136,6 +200,7 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
                 "typical_altitude_m": [0.0, 25000.0],
                 "kg_support_count": int(row.get("support_count") or 0),
                 "evidence_paths": row.get("evidence_paths") or [],
+                "semantic_match_score": float(row.get("semantic_match_score") or 0.0),
             }
         )
     return hypotheses[:n]
@@ -175,7 +240,10 @@ def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], cand
 
     def score(candidate: Mapping[str, Any]) -> tuple[float, str, str]:
         aliases = [str(alias).lower() for alias in candidate.get("emitter_aliases", [])]
-        alias_score = 1.0 if any(alias and alias in sensor_name for alias in aliases) else 0.0
+        observed_tokens = set(emitter_semantic_tokens([sensor_name]))
+        candidate_tokens = set(emitter_semantic_tokens(aliases))
+        token_score = len(observed_tokens & candidate_tokens) / max(len(candidate_tokens), 1) if candidate_tokens else 0.0
+        alias_score = max(1.0 if any(alias and alias in sensor_name for alias in aliases) else 0.0, token_score)
         class_score = 1.0 if target_type and target_type == candidate.get("platform_class") else 0.0
         speed_low, speed_high = candidate.get("typical_speed_kt", [0.0, 2500.0])
         alt_low, alt_high = candidate.get("typical_altitude_m", [0.0, 25000.0])

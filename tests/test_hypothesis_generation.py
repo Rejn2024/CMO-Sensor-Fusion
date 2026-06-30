@@ -4,6 +4,7 @@ from combat_id_calibration.cmo_observation_ingest import parse_observation_line
 from combat_id_calibration.hypothesis_generation import (
     build_llm_hypothesis_prompt,
     emitter_aliases,
+    emitter_semantic_tokens,
     fetch_graph_hypotheses_with_session,
     graph_hypothesis_query,
     probe_knowledge_graph_with_session,
@@ -24,8 +25,18 @@ class RecordingSession:
         return self.responses.pop(0)
 
 
-def test_emitter_aliases_extracts_full_bracketed_and_prefix_aliases():
-    assert emitter_aliases("Slot Back [N-010 Zhuk-M]") == ["Slot Back [N-010 Zhuk-M]", "N-010 Zhuk-M", "Slot Back"]
+def test_emitter_aliases_extracts_full_bracketed_prefix_and_semantic_aliases():
+    assert emitter_aliases("Slot Back [N-010 Zhuk-M]") == [
+        "Slot Back [N-010 Zhuk-M]",
+        "N-010 Zhuk-M",
+        "Slot Back",
+        "N010 Zhuk M",
+        "N010 Zhuk",
+        "Zhuk M",
+        "Slot Back N010 Zhuk M",
+        "Slot Back N010 Zhuk",
+    ]
+    assert emitter_semantic_tokens(["Slot Back [N-010 Zhuk-M]"]) == ["slot", "back", "n010", "zhuk"]
 
 
 def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence():
@@ -35,7 +46,14 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "$limit" in query
     assert "Platform" in query
     assert "OPERATED_BY" in query
-    assert params == {"emitter_aliases": ["N-010 Zhuk-M"], "limit": 10}
+    assert "semantic_match_score" in query
+    assert "matched_tokens" in query
+    assert params == {
+        "emitter_aliases": ["N-010 Zhuk-M"],
+        "emitter_semantic_tokens": ["n010", "zhuk"],
+        "minimum_semantic_token_matches": 2,
+        "limit": 10,
+    }
 
 
 def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contract():
@@ -49,6 +67,7 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
                     "matched_aliases": ["N-010 Zhuk-M"],
                     "support_count": 3,
                     "evidence_paths": [["HAS_SENSOR"]],
+                    "semantic_match_score": 0.0,
                 }
             ]
         ]
@@ -56,7 +75,8 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
 
     rows = fetch_graph_hypotheses_with_session(session, observation, 10)
 
-    assert session.calls[0][1]["emitter_aliases"] == ["Slot Back [N-010 Zhuk-M]", "N-010 Zhuk-M", "Slot Back"]
+    assert "N010 Zhuk" in session.calls[0][1]["emitter_aliases"]
+    assert session.calls[0][1]["emitter_semantic_tokens"] == ["slot", "back", "n010", "zhuk"]
     assert session.calls[0][1]["limit"] == 40
     assert rows == [
         {
@@ -68,6 +88,7 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
             "typical_altitude_m": [0.0, 25000.0],
             "kg_support_count": 3,
             "evidence_paths": [["HAS_SENSOR"]],
+            "semantic_match_score": 0.0,
         }
     ]
 
