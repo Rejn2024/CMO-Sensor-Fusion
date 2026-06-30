@@ -19,6 +19,7 @@ from .feature_extraction import ContactHypothesisFeatures, feature_logit
 from .io import write_jsonl
 
 PROBABILITY_SCHEMA = "platform_operator_nation_probability_v1"
+UNKNOWN_OPERATOR_NATION_LABELS = {"", "unknown", "unk", "n/a", "na", "none", "null", "not specified", "unspecified"}
 
 
 def _text(record: Mapping[str, object], *keys: str, default: str = "") -> str:
@@ -34,6 +35,21 @@ def _float(record: Mapping[str, object], key: str, default: float = 0.0) -> floa
         return float(record.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _is_unknown_operator_nation(label: object) -> bool:
+    """Return true when an operator-nation label is a non-identifying placeholder."""
+
+    return str(label or "").strip().casefold() in UNKNOWN_OPERATOR_NATION_LABELS
+
+
+def _top_positive_operator_nation(operator_nation_distribution: Mapping[str, float]) -> tuple[str, float]:
+    """Select the highest-probability positive operator-nation identification."""
+
+    for operator_nation, probability in operator_nation_distribution.items():
+        if not _is_unknown_operator_nation(operator_nation):
+            return operator_nation, probability
+    raise ValueError("probability model requires at least one positive operator-nation candidate")
 
 
 def feature_row_to_logit(record: Mapping[str, object]) -> float:
@@ -120,6 +136,7 @@ def platform_operator_nation_distribution(
     candidates.sort(key=lambda item: float(item["probability"]), reverse=True)
     platform_distribution = dict(sorted(platform_probs.items(), key=lambda item: item[1], reverse=True))
     operator_nation_distribution = dict(sorted(operator_nation_probs.items(), key=lambda item: item[1], reverse=True))
+    top_operator_nation, top_operator_nation_probability = _top_positive_operator_nation(operator_nation_distribution)
     first = rows[0]
     return {
         "schema": PROBABILITY_SCHEMA,
@@ -128,8 +145,8 @@ def platform_operator_nation_distribution(
         "observation_time": _text(first, "observation_time"),
         "top_platform": next(iter(platform_distribution)),
         "top_platform_probability": next(iter(platform_distribution.values())),
-        "top_operator_nation": next(iter(operator_nation_distribution)),
-        "top_operator_nation_probability": next(iter(operator_nation_distribution.values())),
+        "top_operator_nation": top_operator_nation,
+        "top_operator_nation_probability": top_operator_nation_probability,
         "platform_probabilities": platform_distribution,
         "operator_nation_probabilities": operator_nation_distribution,
         "candidates": candidates,

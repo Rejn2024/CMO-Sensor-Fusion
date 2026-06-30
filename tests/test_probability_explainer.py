@@ -111,6 +111,38 @@ def test_platform_operator_nation_distribution_top_platform_uses_marginal_distri
     assert result["top_platform_probability"] == pytest.approx(result["platform_probabilities"]["Repeated"])
 
 
+def test_operator_nation_top_identification_skips_unknown_placeholder():
+    rows = [
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "MiG-29",
+            "operator_nation": "Unknown",
+            "feature_logit": 3.0,
+            "evidence_query_id": "unknown",
+        },
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "MiG-29",
+            "operator_nation": "Russia",
+            "feature_logit": 2.9,
+            "evidence_query_id": "russia",
+        },
+    ]
+
+    result = platform_operator_nation_distribution(rows)
+    payload = build_explanation_payload(result)
+
+    assert result["operator_nation_probabilities"]["Unknown"] > result["operator_nation_probabilities"]["Russia"]
+    assert result["top_operator_nation"] == "Russia"
+    assert "Russia" in payload["summary"]
+    assert "Unknown" not in payload["summary"]
+    assert "Unknown" not in payload["llm_prompt"]
+
+
 def test_group_feature_rows_groups_by_contact_time():
     rows = candidate_rows() + [{**candidate_rows()[0], "contact_id": "c2"}]
 
