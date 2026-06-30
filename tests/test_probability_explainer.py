@@ -72,6 +72,45 @@ def test_platform_operator_nation_distribution_allows_repeated_platform_names():
     )
 
 
+def test_platform_operator_nation_distribution_top_platform_uses_marginal_distribution():
+    rows = [
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "HighSingle",
+            "operator_nation": "Nation A",
+            "feature_logit": 3.0,
+            "evidence_query_id": "single",
+        },
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "Repeated",
+            "operator_nation": "Nation B",
+            "feature_logit": 2.9,
+            "evidence_query_id": "repeat-1",
+        },
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "Repeated",
+            "operator_nation": "Nation C",
+            "feature_logit": 2.9,
+            "evidence_query_id": "repeat-2",
+        },
+    ]
+
+    result = platform_operator_nation_distribution(rows)
+
+    assert result["candidates"][0]["platform"] == "HighSingle"
+    assert result["platform_probabilities"]["Repeated"] > result["platform_probabilities"]["HighSingle"]
+    assert result["top_platform"] == "Repeated"
+    assert result["top_platform_probability"] == pytest.approx(result["platform_probabilities"]["Repeated"])
+
+
 def test_group_feature_rows_groups_by_contact_time():
     rows = candidate_rows() + [{**candidate_rows()[0], "contact_id": "c2"}]
 
