@@ -11,6 +11,7 @@ from combat_id_calibration.graph_ingest import (
     _write_fact,
     build_extraction_prompt,
     chunk_text,
+    read_known_aircraft,
     extract_facts,
     create_neo4j_schema,
     parse_extracted_facts,
@@ -68,6 +69,29 @@ def test_build_extraction_prompt_requests_broad_varied_context():
     assert "current operator section" in prompt
     assert "former operator sections" in prompt
 
+
+
+def test_build_extraction_prompt_accepts_known_aircraft_guardrails():
+    document = SourceDocument(
+        source_id=stable_id("pdf", "prompt-aircraft"),
+        source_type="pdf",
+        locator="prompt.pdf",
+        title="Prompt",
+        text="",
+    )
+    prompt = build_extraction_prompt(document, "The Zhuk radar is used by the MiG-29.", ["MiG-29", "Su-27"])
+
+    assert "Known aircraft platform reference list" in prompt
+    assert "- MiG-29" in prompt
+    assert "vehicle, vessel, or base system" in prompt
+    assert "Zhuk should remain a radar/emitter" in prompt
+
+
+def test_read_known_aircraft_supports_comments_and_csv_names(tmp_path):
+    path = tmp_path / "aircraft.csv"
+    path.write_text("# name,source\nMiG-29,Fulcrum\n\nSu-27,Flanker\n", encoding="utf-8")
+
+    assert read_known_aircraft(path) == ["MiG-29", "Su-27"]
 
 def test_extract_facts_emits_chunk_and_parse_diagnostics(monkeypatch, capsys):
     document = SourceDocument(
