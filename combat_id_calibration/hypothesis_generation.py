@@ -281,7 +281,18 @@ def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], cand
             str(candidate.get("operator_nation") or ""),
         )
 
-    return [dict(candidate) for candidate in sorted(candidates, key=score, reverse=True)[:n]]
+    ranked = sorted(candidates, key=score, reverse=True)
+    selected: list[dict[str, object]] = []
+    seen_hypotheses: set[str] = set()
+    for candidate in ranked:
+        hypothesis = str(candidate.get("hypothesis") or "").strip()
+        if not hypothesis or hypothesis in seen_hypotheses:
+            continue
+        seen_hypotheses.add(hypothesis)
+        selected.append(dict(candidate))
+        if len(selected) >= n:
+            break
+    return selected
 
 
 def build_llm_hypothesis_prompt(obs: EmissionObservation | Mapping[str, Any], kg_rows: Sequence[Mapping[str, Any]], n: int) -> str:
