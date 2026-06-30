@@ -237,6 +237,8 @@ CMO LuaHistory observation ontology to support:
 
 Rules:
 - Extract factual relationships useful for identifying platforms, variants, sensors, emitters, weapons, military organizations, operator countries, kinematics, locations, doctrine, operational history, and discriminating context.
+- For Wikipedia sources, only extract current operating-force or operating-nation relationships (including OPERATED_BY, OPERATOR_COUNTRY, SERVICE_WITH, BASED_AT, OPERATES_IN, HOME_BASE_COUNTRY, and equivalent operator/geography predicates) when the supporting text is in a current operator section such as "Current operators", "Operators" entries explicitly marked current, or a country/service list that clearly describes present operators.
+- For Wikipedia sources, do not infer operating forces or nations from former operator sections, operational history, combat history, procurement history, examples, captions, infoboxes, general prose, or ambiguous operator lists; if the chunk does not clearly show current-operator-section context, omit those operator/nation facts.
 - Cover different subjects mentioned in the chunk instead of repeatedly describing only the first or most prominent subject.
 - Use concise canonical entity names and preserve meaningful model numbers, designations, frequencies, ranges, dates, units, and locations.
 - Use upper snake case predicates; prefer the predicates above, but create similarly specific predicates when needed.
