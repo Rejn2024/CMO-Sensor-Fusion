@@ -193,16 +193,23 @@ def _float(record: Mapping[str, object], key: str, default: float = 0.0) -> floa
 
 
 def _optional_float(record: Mapping[str, object], *keys: str) -> float | None:
-    for key in keys:
-        value = record.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(parsed):
-            return parsed
+    """Return the first finite float found in top-level or nested feature fields."""
+
+    records: list[Mapping[str, object]] = [record]
+    features = record.get("features")
+    if isinstance(features, Mapping):
+        records.append(features)
+    for source in records:
+        for key in keys:
+            value = source.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                return parsed
     return None
 
 
@@ -314,8 +321,8 @@ def haversine_distance_km(
 def operator_nation_distance_evidence(record: Mapping[str, object], operator_nation: str) -> dict[str, object] | None:
     """Return optional emitter-to-nearest-operator-country-border distance evidence for a candidate row."""
 
-    emitter_latitude = _optional_float(record, "emitter_latitude", "emission_latitude", "latitude")
-    emitter_longitude = _optional_float(record, "emitter_longitude", "emission_longitude", "longitude")
+    emitter_latitude = _optional_float(record, "emitter_latitude", "emission_latitude", "latitude", "lat", "lattitude")
+    emitter_longitude = _optional_float(record, "emitter_longitude", "emission_longitude", "longitude", "lon", "lng")
     if emitter_latitude is None or emitter_longitude is None:
         return None
     border_polygon = _parse_border_polygon(record) or _country_border_polygon(operator_nation)

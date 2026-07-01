@@ -137,6 +137,41 @@ def test_platform_operator_nation_distribution_adjusts_logits_with_distance_evid
     assert near_candidate["operator_nation_distance_km"] < far_candidate["operator_nation_distance_km"]
 
 
+
+def test_platform_operator_nation_distribution_reads_coordinates_from_features_dictionary():
+    rows = [
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "near-platform",
+            "operator_nation": "Belarus",
+            "feature_logit": 0.0,
+            "features": {"latitude": 53.7, "longitude": 28.0},
+            "evidence_query_id": "near",
+        },
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "far-platform",
+            "operator_nation": "United States",
+            "feature_logit": 0.0,
+            "features": {"lattitude": 53.7, "lon": 28.0},
+            "evidence_query_id": "far",
+        },
+    ]
+
+    result = platform_operator_nation_distribution(rows)
+
+    near_candidate = next(candidate for candidate in result["candidates"] if candidate["evidence_query_id"] == "near")
+    far_candidate = next(candidate for candidate in result["candidates"] if candidate["evidence_query_id"] == "far")
+    assert near_candidate["emitter_latitude"] == pytest.approx(53.7)
+    assert near_candidate["emitter_longitude"] == pytest.approx(28.0)
+    assert far_candidate["emitter_latitude"] == pytest.approx(53.7)
+    assert far_candidate["emitter_longitude"] == pytest.approx(28.0)
+    assert near_candidate["operator_nation_distance_km"] < far_candidate["operator_nation_distance_km"]
+
 def test_platform_operator_nation_distribution_assigns_platform_and_origin_probabilities():
     result = platform_operator_nation_distribution(candidate_rows())
 
