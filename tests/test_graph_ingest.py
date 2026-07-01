@@ -10,6 +10,7 @@ from combat_id_calibration.graph_ingest import (
     _validate_neo4j_credentials,
     _write_fact,
     _looks_like_country,
+    canonical_entity_name,
     build_extraction_prompt,
     chunk_text,
     extract_facts,
@@ -276,6 +277,13 @@ def test_country_name_guard_covers_current_country_names_and_common_aliases():
     assert _looks_like_country("United States of America")
 
 
+def test_canonical_entity_name_coalesces_manufacturer_prefixed_designations():
+    assert canonical_entity_name("Mikoyen MiG-29") == "MiG-29"
+    assert canonical_entity_name("Mikoyan MiG-29SMT") == "MiG-29SMT"
+    assert canonical_entity_name("MiG-29") == "MiG-29"
+    assert canonical_entity_name("N019 radar") == "N019 radar"
+
+
 def test_write_fact_emits_parameterized_neo4j_cypher():
     tx = RecordingRunner()
     fact = ExtractedFact(
@@ -301,6 +309,28 @@ def test_write_fact_emits_parameterized_neo4j_cypher():
     typed_statement, typed_parameters = tx.calls[1]
     assert "MERGE (subject)-[rel:HAS_SENSOR]->(object)" in typed_statement
     assert typed_parameters["object_is_sensor"] is True
+
+
+def test_write_fact_uses_canonical_entity_ids_and_aliases_for_manufacturer_prefixed_names():
+    tx = RecordingRunner()
+    fact = ExtractedFact(
+        subject="Mikoyen MiG-29",
+        predicate="HAS_SENSOR",
+        object="N019 radar",
+        source_id="source-1",
+        source_type="wikipedia",
+        locator="https://example.test/wiki/MiG-29",
+        evidence="The source spells the platform as Mikoyen MiG-29.",
+        confidence=0.9,
+    )
+
+    _write_fact(tx, fact)
+
+    statement, parameters = tx.calls[0]
+    assert "subject.aliases" in statement
+    assert parameters["subject"] == "MiG-29"
+    assert parameters["raw_subject"] == "Mikoyen MiG-29"
+    assert parameters["subject_id"] == stable_id("entity", "mig-29")
 
 
 def test_write_fact_keeps_audit_fact_but_skips_incompatible_typed_relation():
