@@ -785,6 +785,48 @@ _COUNTRY_NAMES = {
 }
 
 
+_MANUFACTURER_PREFIX_PATTERNS = [
+    # Wikipedia and source documents are not always consistent about whether
+    # aircraft designations include the manufacturer.  Treat common full-name
+    # forms as aliases of the short military designation so facts extracted from
+    # "Mikoyan MiG-29" and "MiG-29" land on the same KG node.
+    (re.compile(r"^(?:mikoy[ae]n|mikoyan-gurevich)\s+(mig[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "MiG"),
+    (re.compile(r"^(?:sukhoi)\s+(su[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "Su"),
+    (re.compile(r"^(?:tupolev)\s+(tu[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "Tu"),
+    (re.compile(r"^(?:ilyushin)\s+(il[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "Il"),
+    (re.compile(r"^(?:lockheed martin|lockheed)\s+(f[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "F"),
+    (re.compile(r"^(?:boeing|mcdonnell douglas|douglas)\s+(f[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "F"),
+    (re.compile(r"^(?:northrop grumman|northrop)\s+(f[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "F"),
+    (re.compile(r"^(?:general dynamics)\s+(f[-\s]?\d+[a-z0-9-]*)$", re.IGNORECASE), "F"),
+    (re.compile(r"^(?:eurofighter)\s+(typhoon(?:\s+[a-z0-9.]+)?)$", re.IGNORECASE), "Typhoon"),
+]
+
+
+def _format_designation(designation: str, family_prefix: str) -> str:
+    compact = re.sub(r"\s+", "-", designation.strip())
+    if compact.lower().startswith(family_prefix.lower()):
+        compact = family_prefix + compact[len(family_prefix) :]
+    return compact
+
+
+def canonical_entity_name(value: str) -> str:
+    """Return the canonical node name used for entity identity.
+
+    The extractor preserves source wording, but Neo4j identity should be stable
+    across manufacturer-prefixed and short designation forms.  This function is
+    intentionally conservative: it only rewrites names that cleanly match common
+    manufacturer + military designation patterns and otherwise leaves text
+    unchanged.
+    """
+
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    for pattern, family_prefix in _MANUFACTURER_PREFIX_PATTERNS:
+        match = pattern.match(name)
+        if match:
+            return _format_designation(match.group(1), family_prefix)
+    return name
+
+
 def _entity_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).upper()
 
@@ -815,14 +857,26 @@ def _typed_relation_is_compatible(fact: ExtractedFact) -> bool:
 def _write_fact(tx: object, fact: ExtractedFact) -> None:
     """Write one extracted fact to Neo4j inside a transaction."""
 
-    subject_id = stable_id("entity", fact.subject.lower())
-    object_id = stable_id("entity", fact.object.lower())
+    subject_name = canonical_entity_name(fact.subject)
+    object_name = canonical_entity_name(fact.object)
+    subject_id = stable_id("entity", subject_name.lower())
+    object_id = stable_id("entity", object_name.lower())
     tx.run(
         """
         MERGE (subject:Entity {id: $subject_id})
           SET subject.name = $subject
+          SET subject.aliases = CASE
+            WHEN $raw_subject = $subject THEN coalesce(subject.aliases, [])
+            WHEN $raw_subject IN coalesce(subject.aliases, []) THEN subject.aliases
+            ELSE coalesce(subject.aliases, []) + $raw_subject
+          END
         MERGE (object:Entity {id: $object_id})
           SET object.name = $object
+          SET object.aliases = CASE
+            WHEN $raw_object = $object THEN coalesce(object.aliases, [])
+            WHEN $raw_object IN coalesce(object.aliases, []) THEN object.aliases
+            ELSE coalesce(object.aliases, []) + $raw_object
+          END
         MERGE (source:Source {id: $source_id})
           SET source.source_type = $source_type,
               source.locator = $locator
@@ -837,8 +891,10 @@ def _write_fact(tx: object, fact: ExtractedFact) -> None:
         """,
         subject_id=subject_id,
         object_id=object_id,
-        subject=fact.subject,
-        object=fact.object,
+        subject=subject_name,
+        object=object_name,
+        raw_subject=fact.subject,
+        raw_object=fact.object,
         source_id=fact.source_id,
         source_type=fact.source_type,
         locator=fact.locator,
