@@ -26,18 +26,23 @@ from .graph_ingest import (
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
-def _relationship_pattern(relationship_types: Sequence[str] | None) -> str:
-    """Return a Cypher variable-length relationship pattern for vetted types."""
+def _normalized_relationship_types(relationship_types: Sequence[str] | None) -> list[str]:
+    """Return deduplicated, vetted Neo4j relationship type names."""
 
-    if not relationship_types:
-        return "[*1..3]"
     normalized = []
-    for relationship_type in relationship_types:
+    for relationship_type in relationship_types or []:
         value = str(relationship_type).strip().upper()
         if not _RELATIONSHIP_TYPE_RE.fullmatch(value):
             raise ValueError(f"Invalid Neo4j relationship type: {relationship_type!r}")
         if value not in normalized:
             normalized.append(value)
+    return normalized
+
+
+def _relationship_pattern(relationship_types: Sequence[str] | None) -> str:
+    """Return a Cypher variable-length relationship pattern for vetted types."""
+
+    normalized = _normalized_relationship_types(relationship_types)
     if not normalized:
         return "[*1..3]"
     return f"[:{'|'.join(normalized)}*1..3]"
@@ -224,44 +229,54 @@ def graph_hypothesis_query(
         relationship_types = None
     if limit is None:
         raise TypeError("limit is required")
-    platform_path_pattern = _relationship_pattern(
+    platform_relationship_types = _normalized_relationship_types(
         relationship_types if not isinstance(relationship_types, int) else None
     )
 
     query = f"""
     MATCH (emitter)
-    WITH emitter, toLower(coalesce(emitter.name, emitter.id, emitter.title, '')) AS emitter_name
+    WITH emitter, toLower(coalesce(emitter.name, emitter.id, properties(emitter)['title'], '')) AS emitter_name
     WITH emitter, emitter_name,
          reduce(normalized = emitter_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_emitter_name
     WITH emitter, emitter_name, normalized_emitter_name,
          [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
          [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
-    OPTIONAL MATCH platform_path = (platform)-{platform_path_pattern}-(emitter)
-    WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft'])
+    OPTIONAL MATCH platform_path = (platform)-[*1..3]-(emitter)
+    WHERE (size($platform_relationship_types) = 0 OR all(rel IN relationships(platform_path) WHERE type(rel) IN $platform_relationship_types))
+      AND any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft'])
       AND none(label IN labels(platform) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])
-    OPTIONAL MATCH (platform)-[:VARIANT_OF|HAS_VARIANT|AIRCRAFT_FAMILY*0..1]-(aircraft_variant)
-    WHERE aircraft_variant IS NULL OR (
+    OPTIONAL MATCH aircraft_variant_path = (platform)-[*0..1]-(aircraft_variant)
+    WHERE (aircraft_variant IS NULL OR all(rel IN relationships(aircraft_variant_path) WHERE type(rel) IN $aircraft_variant_relationship_types))
+      AND (aircraft_variant IS NULL OR (
         any(label IN labels(aircraft_variant) WHERE label IN ['Platform', 'Aircraft'])
         AND none(label IN labels(aircraft_variant) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])
-    )
-    OPTIONAL MATCH (emitter)-[:VARIANT_OF|HAS_VARIANT|ALSO_KNOWN_AS*0..1]-(emitter_variant)
-    WHERE emitter_variant IS NULL OR any(label IN labels(emitter_variant) WHERE label IN ['Sensor', 'Entity'])
-    OPTIONAL MATCH (platform)-[:OPERATED_BY|OPERATOR|USED_BY|SERVICE_WITH|ASSIGNED_TO]-(operator:Operator)
-    OPTIONAL MATCH (platform)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY]-(operator_country:Country)
-    OPTIONAL MATCH (operator)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY|LOCATED_IN]-(operator_country_via_operator:Country)
+      ))
+    OPTIONAL MATCH emitter_variant_path = (emitter)-[*0..1]-(emitter_variant)
+    WHERE (emitter_variant IS NULL OR all(rel IN relationships(emitter_variant_path) WHERE type(rel) IN $emitter_variant_relationship_types))
+      AND (emitter_variant IS NULL OR any(label IN labels(emitter_variant) WHERE label IN ['Sensor', 'Entity']))
+    OPTIONAL MATCH (platform)-[operator_relationship]-(operator)
+    WHERE type(operator_relationship) IN $operator_relationship_types
+      AND any(label IN labels(operator) WHERE label = 'Operator')
+    OPTIONAL MATCH (platform)-[operator_country_relationship]-(operator_country)
+    WHERE type(operator_country_relationship) IN $operator_country_relationship_types
+      AND any(label IN labels(operator_country) WHERE label = 'Country')
+    OPTIONAL MATCH (operator)-[operator_country_via_operator_relationship]-(operator_country_via_operator)
+    WHERE type(operator_country_via_operator_relationship) IN $operator_country_via_operator_relationship_types
+      AND any(label IN labels(operator_country_via_operator) WHERE label = 'Country')
     WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
-    OPTIONAL MATCH (kinematic_subject)-[kinematic_fact:FACT]->(kinematic_value)
+    OPTIONAL MATCH (kinematic_subject)-[kinematic_fact]->(kinematic_value)
     WHERE kinematic_subject IN [platform, aircraft_variant]
+      AND type(kinematic_fact) = $kinematic_fact_relationship_type
       AND kinematic_fact.predicate IN ['MAX_SPEED_KT', 'TYPICAL_SPEED_KT', 'CRUISE_SPEED_KT', 'SERVICE_CEILING_M', 'MAX_ALTITUDE_M', 'TYPICAL_ALTITUDE_M']
-    WITH coalesce(platform.name, platform.id, platform.title) AS hypothesis,
-         coalesce(aircraft_variant.name, aircraft_variant.id, aircraft_variant.title, platform.name, platform.id, platform.title) AS aircraft_variant,
-         coalesce(emitter_variant.name, emitter_variant.id, emitter_variant.title, emitter.name, emitter.id, emitter.title) AS emitter_variant,
-         coalesce(operator_country.name, operator_country.id, operator_country.title,
-                  operator_country_via_operator.name, operator_country_via_operator.id, operator_country_via_operator.title,
+    WITH coalesce(platform.name, platform.id, properties(platform)['title']) AS hypothesis,
+         coalesce(aircraft_variant.name, aircraft_variant.id, properties(aircraft_variant)['title'], platform.name, platform.id, properties(platform)['title']) AS aircraft_variant,
+         coalesce(emitter_variant.name, emitter_variant.id, properties(emitter_variant)['title'], emitter.name, emitter.id, properties(emitter)['title']) AS emitter_variant,
+         coalesce(operator_country.name, operator_country.id, properties(operator_country)['title'],
+                  operator_country_via_operator.name, operator_country_via_operator.id, properties(operator_country_via_operator)['title'],
                   'Unknown') AS operator_nation,
-         collect(DISTINCT coalesce(emitter.name, emitter.id, emitter.title)) AS matched_aliases,
+         collect(DISTINCT coalesce(emitter.name, emitter.id, properties(emitter)['title'])) AS matched_aliases,
          count(DISTINCT platform_path) AS support_count,
          collect(DISTINCT [rel IN relationships(platform_path) | type(rel)]) AS evidence_paths,
          labels(platform) AS platform_labels,
@@ -273,12 +288,12 @@ def graph_hypothesis_query(
              ELSE []
          END AS operator_country_labels,
          max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS max_speed_kt_values,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS typical_speed_kt_values,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'CRUISE_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS cruise_speed_kt_values,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'SERVICE_CEILING_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS service_ceiling_m_values,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS max_altitude_m_values,
-         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS typical_altitude_m_values
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS max_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS typical_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'CRUISE_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS cruise_speed_kt_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'SERVICE_CEILING_M' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS service_ceiling_m_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS max_altitude_m_values,
+         collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_ALTITUDE_M' THEN coalesce(kinematic_value.name, kinematic_value.id, properties(kinematic_value)['title']) END) AS typical_altitude_m_values
     RETURN hypothesis,
            operator_nation,
            aircraft_variant,
@@ -307,6 +322,34 @@ def graph_hypothesis_query(
         "minimum_semantic_token_matches": (
             min(2, len(semantic_tokens)) if semantic_tokens else 1
         ),
+        "platform_relationship_types": platform_relationship_types,
+        "aircraft_variant_relationship_types": [
+            "VARIANT_OF",
+            "HAS_VARIANT",
+            "AIRCRAFT_FAMILY",
+        ],
+        "emitter_variant_relationship_types": [
+            "VARIANT_OF",
+            "HAS_VARIANT",
+            "ALSO_KNOWN_AS",
+        ],
+        "operator_relationship_types": [
+            "OPERATED_BY",
+            "OPERATOR",
+            "USED_BY",
+            "SERVICE_WITH",
+            "ASSIGNED_TO",
+        ],
+        "operator_country_relationship_types": [
+            "OPERATOR_COUNTRY",
+            "HOME_BASE_COUNTRY",
+        ],
+        "operator_country_via_operator_relationship_types": [
+            "OPERATOR_COUNTRY",
+            "HOME_BASE_COUNTRY",
+            "LOCATED_IN",
+        ],
+        "kinematic_fact_relationship_type": "FACT",
         "limit": int(limit),
     }
 
@@ -329,11 +372,11 @@ def graph_probe_queries(
             "alias_nodes",
             """
             MATCH (node)
-            WITH node, toLower(coalesce(node.name, node.id, node.title, '')) AS node_name
+            WITH node, toLower(coalesce(node.name, node.id, properties(node)['title'], '')) AS node_name
             WITH node, node_name, reduce(normalized = node_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_node_name
             WHERE any(alias IN $emitter_aliases WHERE node_name CONTAINS toLower(alias))
                OR size([token IN $emitter_semantic_tokens WHERE normalized_node_name CONTAINS token]) >= $minimum_semantic_token_matches
-            RETURN labels(node) AS labels, coalesce(node.name, node.id, node.title) AS name
+            RETURN labels(node) AS labels, coalesce(node.name, node.id, properties(node)['title']) AS name
             ORDER BY name
             LIMIT 25
             """,
@@ -343,14 +386,14 @@ def graph_probe_queries(
             "alias_neighbours",
             """
             MATCH (node)-[rel]-(neighbour)
-            WITH node, rel, neighbour, toLower(coalesce(node.name, node.id, node.title, '')) AS node_name
+            WITH node, rel, neighbour, toLower(coalesce(node.name, node.id, properties(node)['title'], '')) AS node_name
             WITH node, rel, neighbour, node_name, reduce(normalized = node_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_node_name
             WHERE any(alias IN $emitter_aliases WHERE node_name CONTAINS toLower(alias))
                OR size([token IN $emitter_semantic_tokens WHERE normalized_node_name CONTAINS token]) >= $minimum_semantic_token_matches
-            RETURN coalesce(node.name, node.id, node.title) AS alias_node,
+            RETURN coalesce(node.name, node.id, properties(node)['title']) AS alias_node,
                    type(rel) AS relationship,
                    labels(neighbour) AS neighbour_labels,
-                   coalesce(neighbour.name, neighbour.id, neighbour.title) AS neighbour
+                   coalesce(neighbour.name, neighbour.id, properties(neighbour)['title']) AS neighbour
             ORDER BY alias_node, relationship, neighbour
             LIMIT 50
             """,

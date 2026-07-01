@@ -54,17 +54,54 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "Platform" in query
     assert "Entity', 'CandidateIdentity" not in query
     assert "none(label IN labels(platform) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])" in query
-    assert "OPERATED_BY" in query
-    assert "OPERATOR_COUNTRY" in query
-    assert "VARIANT_OF" in query
+    assert "OPERATED_BY" not in query
+    assert "OPERATOR_COUNTRY" not in query
+    assert "VARIANT_OF" not in query
+    assert "ASSIGNED_TO" not in query
+    assert "[:OPERATED_BY" not in query
+    assert "[:OPERATOR_COUNTRY" not in query
+    assert "[:VARIANT_OF" not in query
+    assert "[kinematic_fact:FACT]" not in query
+    assert "type(operator_relationship) IN $operator_relationship_types" in query
+    assert "type(kinematic_fact) = $kinematic_fact_relationship_type" in query
     assert "semantic_match_score" in query
     assert "matched_tokens" in query
+    assert ".title" not in query
+    assert "properties(emitter)['title']" in query
     assert "MAX_SPEED_KT" in query
     assert "SERVICE_CEILING_M" in query
     assert params == {
         "emitter_aliases": ["N-010 Zhuk-M"],
         "emitter_semantic_tokens": ["n010", "zhuk"],
         "minimum_semantic_token_matches": 2,
+        "platform_relationship_types": [],
+        "aircraft_variant_relationship_types": [
+            "VARIANT_OF",
+            "HAS_VARIANT",
+            "AIRCRAFT_FAMILY",
+        ],
+        "emitter_variant_relationship_types": [
+            "VARIANT_OF",
+            "HAS_VARIANT",
+            "ALSO_KNOWN_AS",
+        ],
+        "operator_relationship_types": [
+            "OPERATED_BY",
+            "OPERATOR",
+            "USED_BY",
+            "SERVICE_WITH",
+            "ASSIGNED_TO",
+        ],
+        "operator_country_relationship_types": [
+            "OPERATOR_COUNTRY",
+            "HOME_BASE_COUNTRY",
+        ],
+        "operator_country_via_operator_relationship_types": [
+            "OPERATOR_COUNTRY",
+            "HOME_BASE_COUNTRY",
+            "LOCATED_IN",
+        ],
+        "kinematic_fact_relationship_type": "FACT",
         "limit": 10,
     }
 
@@ -74,7 +111,10 @@ def test_graph_hypothesis_query_can_limit_platform_path_relationship_types():
         ["N-010 Zhuk-M"], ["HAS_SENSOR", "HAS_PLATFORM"], 10
     )
 
-    assert "(platform)-[:HAS_SENSOR|HAS_PLATFORM*1..3]-(emitter)" in query
+    assert "OPTIONAL MATCH platform_path = (platform)-[*1..3]-(emitter)" in query
+    assert "type(rel) IN $platform_relationship_types" in query
+    assert "HAS_SENSOR" not in query
+    assert params["platform_relationship_types"] == ["HAS_SENSOR", "HAS_PLATFORM"]
     assert params["limit"] == 10
 
 
@@ -264,6 +304,9 @@ def test_probe_knowledge_graph_with_session_reports_alias_node_and_neighbour_row
         "alias_nodes",
         "alias_neighbours",
     ]
+    probe_queries = [call[0] for call in session.calls]
+    assert all(".title" not in query for query in probe_queries)
+    assert all("['title']" in query for query in probe_queries)
     assert report["probes"][0]["rows"][0]["name"] == "N-010 Zhuk-M"
     assert report["probes"][1]["rows"][0]["neighbour"] == "MiG-29"
 
