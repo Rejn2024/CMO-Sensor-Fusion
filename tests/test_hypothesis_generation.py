@@ -7,11 +7,12 @@ from combat_id_calibration.hypothesis_generation import (
     evidence_paths_query_id,
     emitter_semantic_tokens,
     fetch_graph_hypotheses_with_session,
+    fetch_relationship_type_counts_with_session,
     graph_hypothesis_query,
+    relationship_type_counts_query,
     probe_knowledge_graph_with_session,
     select_offline_hypotheses,
 )
-
 
 SAMPLE = "PY_CONTACT_LOG Time : 1844772240 , Sensor_aircraft : Typhoon FGR.4 , Emission_sensor_name : Slot Back [N-010 Zhuk-M] , Emission_altitude : 10316.349609375 , Emission_speed : 479.64691162109 , Emission_target_type : Type: Multirole (Fighter/Attack)"
 
@@ -37,7 +38,12 @@ def test_emitter_aliases_extracts_full_bracketed_prefix_and_semantic_aliases():
         "Slot Back N010 Zhuk M",
         "Slot Back N010 Zhuk",
     ]
-    assert emitter_semantic_tokens(["Slot Back [N-010 Zhuk-M]"]) == ["slot", "back", "n010", "zhuk"]
+    assert emitter_semantic_tokens(["Slot Back [N-010 Zhuk-M]"]) == [
+        "slot",
+        "back",
+        "n010",
+        "zhuk",
+    ]
 
 
 def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence():
@@ -59,6 +65,34 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
         "minimum_semantic_token_matches": 2,
         "limit": 10,
     }
+
+
+def test_graph_hypothesis_query_can_limit_platform_path_relationship_types():
+    query, params = graph_hypothesis_query(
+        ["N-010 Zhuk-M"], ["HAS_SENSOR", "HAS_PLATFORM"], 10
+    )
+
+    assert "(emitter)-[:HAS_SENSOR|HAS_PLATFORM*1..3]-(platform)" in query
+    assert params["limit"] == 10
+
+
+def test_graph_hypothesis_query_rejects_invalid_relationship_types():
+    try:
+        graph_hypothesis_query(["N-010 Zhuk-M"], ["HAS_SENSOR`) MATCH (n) //"], 10)
+    except ValueError as error:
+        assert "Invalid Neo4j relationship type" in str(error)
+    else:
+        raise AssertionError("expected invalid relationship type to be rejected")
+
+
+def test_fetch_relationship_type_counts_with_session_runs_count_query():
+    session = RecordingSession([[{"relationship_type": "HAS_SENSOR", "count": 2}]])
+
+    rows = fetch_relationship_type_counts_with_session(session)
+
+    assert rows == [{"relationship_type": "HAS_SENSOR", "count": 2}]
+    assert "MATCH ()-[rel]->()" in session.calls[0][0]
+    assert "ORDER BY count DESC" in relationship_type_counts_query()
 
 
 def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contract():
@@ -85,7 +119,12 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
     rows = fetch_graph_hypotheses_with_session(session, observation, 10)
 
     assert "N010 Zhuk" in session.calls[0][1]["emitter_aliases"]
-    assert session.calls[0][1]["emitter_semantic_tokens"] == ["slot", "back", "n010", "zhuk"]
+    assert session.calls[0][1]["emitter_semantic_tokens"] == [
+        "slot",
+        "back",
+        "n010",
+        "zhuk",
+    ]
     assert session.calls[0][1]["limit"] == 40
     assert rows == [
         {
@@ -105,7 +144,10 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
 
 
 def test_evidence_paths_query_id_handles_nested_graph_paths_and_seed_strings():
-    assert evidence_paths_query_id([["HAS_SENSOR"], ["DETECTED_BY", "OPERATED_BY"]]) == "HAS_SENSOR|DETECTED_BY>OPERATED_BY"
+    assert (
+        evidence_paths_query_id([["HAS_SENSOR"], ["DETECTED_BY", "OPERATED_BY"]])
+        == "HAS_SENSOR|DETECTED_BY>OPERATED_BY"
+    )
     assert evidence_paths_query_id(["offline_seed"]) == "offline_seed"
     assert evidence_paths_query_id("") == ""
 
@@ -115,13 +157,23 @@ def test_probe_knowledge_graph_with_session_reports_alias_node_and_neighbour_row
     session = RecordingSession(
         [
             [{"labels": ["Sensor"], "name": "N-010 Zhuk-M"}],
-            [{"alias_node": "N-010 Zhuk-M", "relationship": "INSTALLED_ON", "neighbour_labels": ["Platform"], "neighbour": "MiG-29"}],
+            [
+                {
+                    "alias_node": "N-010 Zhuk-M",
+                    "relationship": "INSTALLED_ON",
+                    "neighbour_labels": ["Platform"],
+                    "neighbour": "MiG-29",
+                }
+            ],
         ]
     )
 
     report = probe_knowledge_graph_with_session(session, observation)
 
-    assert [probe["name"] for probe in report["probes"]] == ["alias_nodes", "alias_neighbours"]
+    assert [probe["name"] for probe in report["probes"]] == [
+        "alias_nodes",
+        "alias_neighbours",
+    ]
     assert report["probes"][0]["rows"][0]["name"] == "N-010 Zhuk-M"
     assert report["probes"][1]["rows"][0]["neighbour"] == "MiG-29"
 
@@ -129,11 +181,30 @@ def test_probe_knowledge_graph_with_session_reports_alias_node_and_neighbour_row
 def test_select_offline_hypotheses_prefers_alias_class_kinematics_and_graph_support():
     observation = parse_observation_line(SAMPLE, source_line=1)
     candidates = [
-        {"hypothesis": "Weak", "operator_nation": "Unknown", "emitter_aliases": [], "platform_class": "Other", "typical_speed_kt": [0, 100], "typical_altitude_m": [0, 100], "kg_support_count": 0},
-        {"hypothesis": "MiG-29SMT", "operator_nation": "Russia", "emitter_aliases": ["N-010 Zhuk-M"], "platform_class": "Type: Multirole (Fighter/Attack)", "typical_speed_kt": [300, 900], "typical_altitude_m": [5000, 15000], "kg_support_count": 2},
+        {
+            "hypothesis": "Weak",
+            "operator_nation": "Unknown",
+            "emitter_aliases": [],
+            "platform_class": "Other",
+            "typical_speed_kt": [0, 100],
+            "typical_altitude_m": [0, 100],
+            "kg_support_count": 0,
+        },
+        {
+            "hypothesis": "MiG-29SMT",
+            "operator_nation": "Russia",
+            "emitter_aliases": ["N-010 Zhuk-M"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [300, 900],
+            "typical_altitude_m": [5000, 15000],
+            "kg_support_count": 2,
+        },
     ]
 
-    assert select_offline_hypotheses(observation, candidates, 1)[0]["hypothesis"] == "MiG-29SMT"
+    assert (
+        select_offline_hypotheses(observation, candidates, 1)[0]["hypothesis"]
+        == "MiG-29SMT"
+    )
 
 
 def test_select_offline_hypotheses_returns_unique_graph_combinations():
@@ -179,7 +250,11 @@ def test_select_offline_hypotheses_returns_unique_graph_combinations():
     assert [item["hypothesis"] for item in hypotheses].count("MiG-29SMT") == 2
     assert [item["hypothesis"] for item in hypotheses].count("MiG-35") == 1
     assert hypotheses[0]["operator_nation"] == "Russia"
-    assert {item["operator_nation"] for item in hypotheses if item["hypothesis"] == "MiG-29SMT"} == {"Russia", "Ukraine"}
+    assert {
+        item["operator_nation"]
+        for item in hypotheses
+        if item["hypothesis"] == "MiG-29SMT"
+    } == {"Russia", "Ukraine"}
 
 
 def test_select_offline_hypotheses_deduplicates_identical_graph_combinations():
@@ -210,6 +285,7 @@ def test_select_offline_hypotheses_deduplicates_identical_graph_combinations():
     ]
 
     assert len(select_offline_hypotheses(observation, candidates, 3)) == 1
+
 
 def test_build_llm_hypothesis_prompt_contains_json_contract_and_graph_rows():
     observation = parse_observation_line(SAMPLE, source_line=1)

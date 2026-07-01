@@ -19,6 +19,25 @@ from typing import Any, Iterable, Mapping, Sequence
 from .cmo_observation_ingest import EmissionObservation
 from .graph_ingest import _neo4j_connection_error_message, _validate_neo4j_credentials
 
+_RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _relationship_pattern(relationship_types: Sequence[str] | None) -> str:
+    """Return a Cypher variable-length relationship pattern for vetted types."""
+
+    if not relationship_types:
+        return "[*1..3]"
+    normalized = []
+    for relationship_type in relationship_types:
+        value = str(relationship_type).strip().upper()
+        if not _RELATIONSHIP_TYPE_RE.fullmatch(value):
+            raise ValueError(f"Invalid Neo4j relationship type: {relationship_type!r}")
+        if value not in normalized:
+            normalized.append(value)
+    if not normalized:
+        return "[*1..3]"
+    return f"[:{'|'.join(normalized)}*1..3]"
+
 
 def emitter_aliases(sensor_name: str) -> list[str]:
     """Return normalized aliases for a CMO emission sensor string.
@@ -78,10 +97,23 @@ def _semantic_alias_variants(text: str) -> list[str]:
     return variants
 
 
-def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dict[str, object]]:
+def graph_hypothesis_query(
+    aliases: Sequence[str],
+    relationship_types: Sequence[str] | int | None = None,
+    limit: int | None = None,
+) -> tuple[str, dict[str, object]]:
     """Build the parameterized Neo4j query for candidate platform/operator rows."""
 
-    query = """
+    if isinstance(relationship_types, int) and limit is None:
+        limit = relationship_types
+        relationship_types = None
+    if limit is None:
+        raise TypeError("limit is required")
+    platform_path_pattern = _relationship_pattern(
+        relationship_types if not isinstance(relationship_types, int) else None
+    )
+
+    query = f"""
     MATCH (emitter)
     WITH emitter, toLower(coalesce(emitter.name, emitter.id, emitter.title, '')) AS emitter_name
     WITH emitter, emitter_name,
@@ -90,7 +122,7 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
          [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
          [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
-    OPTIONAL MATCH platform_path = (emitter)-[*1..3]-(platform)
+    OPTIONAL MATCH platform_path = (emitter)-{platform_path_pattern}-(platform)
     WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
     OPTIONAL MATCH (platform)-[:VARIANT_OF|HAS_VARIANT|AIRCRAFT_FAMILY*0..1]-(aircraft_variant)
     WHERE aircraft_variant IS NULL OR any(label IN labels(aircraft_variant) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
@@ -143,19 +175,25 @@ def graph_hypothesis_query(aliases: Sequence[str], limit: int) -> tuple[str, dic
     return query, {
         "emitter_aliases": list(aliases),
         "emitter_semantic_tokens": semantic_tokens,
-        "minimum_semantic_token_matches": min(2, len(semantic_tokens)) if semantic_tokens else 1,
+        "minimum_semantic_token_matches": (
+            min(2, len(semantic_tokens)) if semantic_tokens else 1
+        ),
         "limit": int(limit),
     }
 
 
-def graph_probe_queries(aliases: Sequence[str]) -> list[tuple[str, str, dict[str, object]]]:
+def graph_probe_queries(
+    aliases: Sequence[str],
+) -> list[tuple[str, str, dict[str, object]]]:
     """Return named diagnostic Cypher probes for inspecting graph coverage."""
 
     semantic_tokens = emitter_semantic_tokens(aliases)
     params = {
         "emitter_aliases": list(aliases),
         "emitter_semantic_tokens": semantic_tokens,
-        "minimum_semantic_token_matches": min(2, len(semantic_tokens)) if semantic_tokens else 1,
+        "minimum_semantic_token_matches": (
+            min(2, len(semantic_tokens)) if semantic_tokens else 1
+        ),
     }
     return [
         (
@@ -223,7 +261,9 @@ def _rows(result: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [dict(row) for row in result]
 
 
-def _first_numeric_value(value: object, preferred_units: Sequence[str] = ()) -> float | None:
+def _first_numeric_value(
+    value: object, preferred_units: Sequence[str] = ()
+) -> float | None:
     """Return the first parseable number from nested Neo4j scalar/list values.
 
     When source strings include multiple unit conversions, prefer the value next
@@ -256,7 +296,10 @@ def _first_numeric_value(value: object, preferred_units: Sequence[str] = ()) -> 
 
 
 def _kinematic_range(
-    row: Mapping[str, Any], keys: Sequence[str], default_upper: float, preferred_units: Sequence[str] = ()
+    row: Mapping[str, Any],
+    keys: Sequence[str],
+    default_upper: float,
+    preferred_units: Sequence[str] = (),
 ) -> list[float]:
     """Build the candidate [low, high] range from extracted max performance facts."""
 
@@ -267,7 +310,54 @@ def _kinematic_range(
     return [0.0, default_upper]
 
 
-def probe_knowledge_graph_with_session(session: object, obs: EmissionObservation | Mapping[str, Any]) -> dict[str, object]:
+def relationship_type_counts_query() -> str:
+    """Return Cypher for counting every relationship type in the graph."""
+
+    return """
+    MATCH ()-[rel]->()
+    RETURN type(rel) AS relationship_type, count(*) AS count
+    ORDER BY count DESC, relationship_type ASC
+    """
+
+
+def fetch_relationship_type_counts_with_session(
+    session: object,
+) -> list[dict[str, object]]:
+    """Return relationship types and counts from a Neo4j session-like object."""
+
+    return _rows(session.run(relationship_type_counts_query()))
+
+
+def fetch_relationship_type_counts(
+    uri: str, user: str, password: str, database: str | None = None
+) -> list[dict[str, object]]:
+    """Fetch relationship type counts from a live Neo4j database."""
+
+    user, password = _validate_neo4j_credentials(user, password)
+    neo4j = importlib.import_module("neo4j")
+    driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        try:
+            driver.verify_connectivity()
+            with driver.session(
+                **({"database": database} if database else {})
+            ) as session:
+                return fetch_relationship_type_counts_with_session(session)
+        except neo4j.exceptions.ServiceUnavailable as error:
+            raise RuntimeError(
+                _neo4j_connection_error_message(uri, database)
+            ) from error
+        except neo4j.exceptions.AuthError as error:
+            raise RuntimeError(
+                f"Neo4j rejected the credentials for {uri!r}."
+            ) from error
+    finally:
+        driver.close()
+
+
+def probe_knowledge_graph_with_session(
+    session: object, obs: EmissionObservation | Mapping[str, Any]
+) -> dict[str, object]:
     """Run diagnostic graph probes for the observation's emitter aliases."""
 
     sensor_name = _observation_value(obs, "emission_sensor_name")
@@ -278,10 +368,19 @@ def probe_knowledge_graph_with_session(session: object, obs: EmissionObservation
     return {"emitter_aliases": aliases, "probes": probes}
 
 
-def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservation | Mapping[str, Any], n: int) -> list[dict[str, object]]:
+def fetch_graph_hypotheses_with_session(
+    session: object,
+    obs: EmissionObservation | Mapping[str, Any],
+    n: int,
+    relationship_types: Sequence[str] | None = None,
+) -> list[dict[str, object]]:
     """Query a Neo4j session-like object for candidate hypotheses."""
 
-    query, params = graph_hypothesis_query(emitter_aliases(_observation_value(obs, "emission_sensor_name")), max(n * 4, n))
+    query, params = graph_hypothesis_query(
+        emitter_aliases(_observation_value(obs, "emission_sensor_name")),
+        relationship_types,
+        max(n * 4, n),
+    )
     rows = _rows(session.run(query, **params))
     hypotheses: list[dict[str, object]] = []
     for row in rows:
@@ -297,10 +396,24 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
                 "emitter_aliases": list(row.get("matched_aliases") or []),
                 "platform_class": _observation_value(obs, "emission_target_type"),
                 "typical_speed_kt": _kinematic_range(
-                    row, ["max_speed_kt_values", "typical_speed_kt_values", "cruise_speed_kt_values"], float('nan'), ["kt", "kts", "knot", "knots"]
+                    row,
+                    [
+                        "max_speed_kt_values",
+                        "typical_speed_kt_values",
+                        "cruise_speed_kt_values",
+                    ],
+                    float("nan"),
+                    ["kt", "kts", "knot", "knots"],
                 ),
                 "typical_altitude_m": _kinematic_range(
-                    row, ["service_ceiling_m_values", "max_altitude_m_values", "typical_altitude_m_values"], float('nan'), ["m", "meter", "meters"]
+                    row,
+                    [
+                        "service_ceiling_m_values",
+                        "max_altitude_m_values",
+                        "typical_altitude_m_values",
+                    ],
+                    float("nan"),
+                    ["m", "meter", "meters"],
                 ),
                 "kg_support_count": int(row.get("support_count") or 0),
                 "evidence_paths": row.get("evidence_paths") or [],
@@ -310,7 +423,15 @@ def fetch_graph_hypotheses_with_session(session: object, obs: EmissionObservatio
     return hypotheses[:n]
 
 
-def fetch_graph_hypotheses(obs: EmissionObservation | Mapping[str, Any], n: int, uri: str, user: str, password: str, database: str | None = None) -> list[dict[str, object]]:
+def fetch_graph_hypotheses(
+    obs: EmissionObservation | Mapping[str, Any],
+    n: int,
+    uri: str,
+    user: str,
+    password: str,
+    database: str | None = None,
+    relationship_types: Sequence[str] | None = None,
+) -> list[dict[str, object]]:
     """Fetch hypotheses from a live Neo4j database."""
 
     user, password = _validate_neo4j_credentials(user, password)
@@ -319,17 +440,29 @@ def fetch_graph_hypotheses(obs: EmissionObservation | Mapping[str, Any], n: int,
     try:
         try:
             driver.verify_connectivity()
-            with driver.session(**({"database": database} if database else {})) as session:
-                return fetch_graph_hypotheses_with_session(session, obs, n)
+            with driver.session(
+                **({"database": database} if database else {})
+            ) as session:
+                return fetch_graph_hypotheses_with_session(
+                    session, obs, n, relationship_types
+                )
         except neo4j.exceptions.ServiceUnavailable as error:
-            raise RuntimeError(_neo4j_connection_error_message(uri, database)) from error
+            raise RuntimeError(
+                _neo4j_connection_error_message(uri, database)
+            ) from error
         except neo4j.exceptions.AuthError as error:
-            raise RuntimeError(f"Neo4j rejected the credentials for {uri!r}.") from error
+            raise RuntimeError(
+                f"Neo4j rejected the credentials for {uri!r}."
+            ) from error
     finally:
         driver.close()
 
 
-def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], candidates: Sequence[Mapping[str, Any]], n: int) -> list[dict[str, object]]:
+def select_offline_hypotheses(
+    obs: EmissionObservation | Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+    n: int,
+) -> list[dict[str, object]]:
     """Rank graph rows deterministically with observation compatibility checks."""
 
     sensor_name = _observation_value(obs, "emission_sensor_name").lower()
@@ -346,14 +479,29 @@ def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], cand
         aliases = [str(alias).lower() for alias in candidate.get("emitter_aliases", [])]
         observed_tokens = set(emitter_semantic_tokens([sensor_name]))
         candidate_tokens = set(emitter_semantic_tokens(aliases))
-        token_score = len(observed_tokens & candidate_tokens) / max(len(candidate_tokens), 1) if candidate_tokens else 0.0
-        alias_score = max(1.0 if any(alias and alias in sensor_name for alias in aliases) else 0.0, token_score)
-        class_score = 1.0 if target_type and target_type == candidate.get("platform_class") else 0.0
+        token_score = (
+            len(observed_tokens & candidate_tokens) / max(len(candidate_tokens), 1)
+            if candidate_tokens
+            else 0.0
+        )
+        alias_score = max(
+            1.0 if any(alias and alias in sensor_name for alias in aliases) else 0.0,
+            token_score,
+        )
+        class_score = (
+            1.0
+            if target_type and target_type == candidate.get("platform_class")
+            else 0.0
+        )
         speed_low, speed_high = candidate.get("typical_speed_kt", [0.0, 2500.0])
         alt_low, alt_high = candidate.get("typical_altitude_m", [0.0, 25000.0])
         kg_score = float(candidate.get("kg_support_count") or 0.0)
         return (
-            kg_score + alias_score * 3.0 + class_score + range_score(speed, float(speed_low), float(speed_high)) + range_score(altitude, float(alt_low), float(alt_high)),
+            kg_score
+            + alias_score * 3.0
+            + class_score
+            + range_score(speed, float(speed_low), float(speed_high))
+            + range_score(altitude, float(alt_low), float(alt_high)),
             str(candidate.get("hypothesis") or ""),
             str(candidate.get("operator_nation") or ""),
         )
@@ -373,11 +521,15 @@ def select_offline_hypotheses(obs: EmissionObservation | Mapping[str, Any], cand
     return selected
 
 
-def build_llm_hypothesis_prompt(obs: EmissionObservation | Mapping[str, Any], kg_rows: Sequence[Mapping[str, Any]], n: int) -> str:
+def build_llm_hypothesis_prompt(
+    obs: EmissionObservation | Mapping[str, Any],
+    kg_rows: Sequence[Mapping[str, Any]],
+    n: int,
+) -> str:
     return "\n".join(
         [
             f"Generate exactly {n} candidate emitter-platform/operator hypotheses from the knowledge-graph rows.",
-            "Return JSON only: {\"hypotheses\":[{\"hypothesis\": str, \"operator_nation\": str, \"rationale\": str}]}",
+            'Return JSON only: {"hypotheses":[{"hypothesis": str, "operator_nation": str, "rationale": str}]}',
             f"Observation: {json.dumps(_observation_dict(obs), sort_keys=True)}",
             f"Knowledge-graph evidence rows: {json.dumps(list(kg_rows), sort_keys=True)}",
         ]
@@ -414,18 +566,64 @@ def _optional_float(value: object) -> float | None:
         return None
 
 
-def add_hypothesis_generation_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = commands.add_parser("generate-hypotheses", help="probe Neo4j and generate candidate hypotheses for one observation JSON file")
-    parser.add_argument("--observation-json", required=True, help="JSON object containing an emission observation")
-    parser.add_argument("--count", type=int, default=10, help="number of candidate hypotheses to return")
-    parser.add_argument("--neo4j-uri", default="bolt://localhost:7687", help="Neo4j Bolt URI")
+def add_hypothesis_generation_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    parser = commands.add_parser(
+        "generate-hypotheses",
+        help="probe Neo4j and generate candidate hypotheses for one observation JSON file",
+    )
+    parser.add_argument(
+        "--observation-json",
+        required=True,
+        help="JSON object containing an emission observation",
+    )
+    parser.add_argument(
+        "--count", type=int, default=10, help="number of candidate hypotheses to return"
+    )
+    parser.add_argument(
+        "--neo4j-uri", default="bolt://localhost:7687", help="Neo4j Bolt URI"
+    )
     parser.add_argument("--neo4j-user", default="neo4j", help="Neo4j username")
     parser.add_argument("--neo4j-password", required=True, help="Neo4j password")
     parser.add_argument("--neo4j-database", help="optional Neo4j database name")
+    parser.add_argument(
+        "--relationship-type",
+        action="append",
+        dest="relationship_types",
+        help="relationship type to allow in emitter-to-platform path expansion; may be repeated",
+    )
+    parser.add_argument(
+        "--list-relationship-types",
+        action="store_true",
+        help="print graph relationship types/counts and exit",
+    )
     parser.set_defaults(handler=run_hypothesis_generation_command)
 
 
 def run_hypothesis_generation_command(args: argparse.Namespace) -> None:
+    if args.list_relationship_types:
+        rows = fetch_relationship_type_counts(
+            args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database
+        )
+        print(json.dumps({"relationship_types": rows}, indent=2))
+        return
     observation = json.loads(Path(args.observation_json).read_text(encoding="utf-8"))
-    rows = fetch_graph_hypotheses(observation, args.count, args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database)
-    print(json.dumps({"hypotheses": select_offline_hypotheses(observation, rows, args.count), "row_count": len(rows)}, indent=2))
+    rows = fetch_graph_hypotheses(
+        observation,
+        args.count,
+        args.neo4j_uri,
+        args.neo4j_user,
+        args.neo4j_password,
+        args.neo4j_database,
+        args.relationship_types,
+    )
+    print(
+        json.dumps(
+            {
+                "hypotheses": select_offline_hypotheses(observation, rows, args.count),
+                "row_count": len(rows),
+            },
+            indent=2,
+        )
+    )
