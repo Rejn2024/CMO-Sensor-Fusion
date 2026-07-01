@@ -108,6 +108,35 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     }
 
 
+def test_graph_hypothesis_query_falls_back_to_aircraft_variant_for_operator_country():
+    query, params = graph_hypothesis_query(["N-010 Zhuk-M"], 10)
+
+    assert (
+        "OPTIONAL MATCH (aircraft_variant)-[aircraft_variant_operator_relationship]"
+        "-(aircraft_variant_operator)"
+    ) in query
+    assert (
+        "OPTIONAL MATCH (aircraft_variant)-[aircraft_variant_operator_country_relationship]"
+        "-(aircraft_variant_operator_country)"
+    ) in query
+    assert (
+        "OPTIONAL MATCH (aircraft_variant_operator)-"
+        "[aircraft_variant_country_via_operator_relationship]"
+        "-(aircraft_variant_country_via_operator)"
+    ) in query
+    assert "WHERE operator_country IS NULL" in query
+    assert "AND operator_country_via_operator IS NULL" in query
+    assert "aircraft_variant_operator_country.name" in query
+    assert "aircraft_variant_country_via_operator.name" in query
+    assert params["operator_relationship_types"] == [
+        "OPERATED_BY",
+        "OPERATOR",
+        "USED_BY",
+        "SERVICE_WITH",
+        "ASSIGNED_TO",
+    ]
+
+
 def test_graph_hypothesis_query_rejects_tiny_reverse_substring_alias_matches():
     query, params = graph_hypothesis_query(
         emitter_aliases("Slot Back [N-010 Zhuk-M]"), 10
