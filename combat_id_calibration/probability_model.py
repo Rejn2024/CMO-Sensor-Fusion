@@ -27,8 +27,8 @@ from .io import write_jsonl
 PROBABILITY_SCHEMA = "platform_operator_nation_probability_v1"
 UNKNOWN_OPERATOR_NATION_LABELS = {"", "unknown", "unk", "n/a", "na", "none", "null", "not specified", "unspecified"}
 EARTH_RADIUS_KM = 6371.0088
-OPERATOR_NATION_DISTANCE_SCALE_KM = 2500.0
-OPERATOR_NATION_DISTANCE_LOGIT_WEIGHT = 1.0
+OPERATOR_NATION_DISTANCE_SCALE_KM = 2000.0
+OPERATOR_NATION_DISTANCE_LOGIT_WEIGHT = 1.25
 _MIG29_SU27_OPERATOR_NATIONS: frozenset[str] = frozenset(
     {
         "algeria",
@@ -321,8 +321,8 @@ def haversine_distance_km(
 def operator_nation_distance_evidence(record: Mapping[str, object], operator_nation: str) -> dict[str, object] | None:
     """Return optional emitter-to-nearest-operator-country-border distance evidence for a candidate row."""
 
-    emitter_latitude = _optional_float(record, "emitter_latitude", "emission_latitude", "latitude", "lat", "lattitude")
-    emitter_longitude = _optional_float(record, "emitter_longitude", "emission_longitude", "longitude", "lon", "lng")
+    emitter_latitude = _optional_float(record, "emitter_latitude", "emission_latitude", "latitude", "lat", "lattitude", "observed_latitude")
+    emitter_longitude = _optional_float(record, "emitter_longitude", "emission_longitude", "longitude", "lon", "lng", "observed_longitude")
     if emitter_latitude is None or emitter_longitude is None:
         return None
     border_polygon = _parse_border_polygon(record) or _country_border_polygon(operator_nation)
@@ -429,9 +429,13 @@ def platform_operator_nation_distribution(
         for row in rows
     ]
     base_logits = [feature_row_to_logit(row) for row in rows]
+
+    print(f'operator_nations : {operator_nations}')
+    print(f'rows: {rows}')
     distance_evidence = [
         operator_nation_distance_evidence(row, operator_nation) for row, operator_nation in zip(rows, operator_nations)
     ]
+    print(f'distance_evidence : {distance_evidence}')
     logits = [
         base_logit + (evidence["operator_nation_distance_logit_adjustment"] if evidence else 0.0)
         for base_logit, evidence in zip(base_logits, distance_evidence)
