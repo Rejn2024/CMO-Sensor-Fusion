@@ -104,6 +104,10 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
             "LOCATED_IN",
         ],
         "kinematic_fact_relationship_type": "FACT",
+        "operator_aircraft_model_fact_predicates": [
+            "OPERATED_BY_AIRCRAFT_MODEL",
+            "AIRCRAFT_MODEL_OPERATED_BY",
+        ],
         "limit": 10,
     }
 
@@ -134,6 +138,19 @@ def test_graph_hypothesis_query_falls_back_to_aircraft_variant_for_operator_coun
         "USED_BY",
         "SERVICE_WITH",
         "ASSIGNED_TO",
+    ]
+
+
+def test_graph_hypothesis_query_uses_fact_predicates_for_operator_aircraft_model():
+    query, params = graph_hypothesis_query(["N-010 Zhuk-M"], 10)
+
+    assert "operator_aircraft_model_fact.predicate IN $operator_aircraft_model_fact_predicates" in query
+    assert "aircraft_variant_operator_aircraft_model_fact.predicate IN $operator_aircraft_model_fact_predicates" in query
+    assert "operator_fact_country.name" in query
+    assert "aircraft_variant_operator_fact_country.name" in query
+    assert params["operator_aircraft_model_fact_predicates"] == [
+        "OPERATED_BY_AIRCRAFT_MODEL",
+        "AIRCRAFT_MODEL_OPERATED_BY",
     ]
 
 

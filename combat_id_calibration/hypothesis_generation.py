@@ -298,6 +298,13 @@ def graph_hypothesis_query(
     OPTIONAL MATCH (operator)-[operator_country_via_operator_relationship]-(operator_country_via_operator)
     WHERE type(operator_country_via_operator_relationship) IN $operator_country_via_operator_relationship_types
       AND any(label IN labels(operator_country_via_operator) WHERE label = 'Country')
+    OPTIONAL MATCH (platform)-[operator_aircraft_model_fact]-(operator_from_aircraft_model_fact)
+    WHERE type(operator_aircraft_model_fact) = $kinematic_fact_relationship_type
+      AND operator_aircraft_model_fact.predicate IN $operator_aircraft_model_fact_predicates
+      AND any(label IN labels(operator_from_aircraft_model_fact) WHERE label = 'Operator')
+    OPTIONAL MATCH (operator_from_aircraft_model_fact)-[operator_fact_country_relationship]-(operator_fact_country)
+    WHERE type(operator_fact_country_relationship) IN $operator_country_via_operator_relationship_types
+      AND any(label IN labels(operator_fact_country) WHERE label = 'Country')
     OPTIONAL MATCH (aircraft_variant)-[aircraft_variant_operator_relationship]-(aircraft_variant_operator)
     WHERE operator_country IS NULL
       AND operator_country_via_operator IS NULL
@@ -313,7 +320,20 @@ def graph_hypothesis_query(
       AND operator_country_via_operator IS NULL
       AND type(aircraft_variant_country_via_operator_relationship) IN $operator_country_via_operator_relationship_types
       AND any(label IN labels(aircraft_variant_country_via_operator) WHERE label = 'Country')
-    WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, aircraft_variant_operator, aircraft_variant_operator_country, aircraft_variant_country_via_operator, platform_path, exact_aliases, matched_tokens
+    OPTIONAL MATCH (aircraft_variant)-[aircraft_variant_operator_aircraft_model_fact]-(aircraft_variant_operator_from_fact)
+    WHERE operator_country IS NULL
+      AND operator_country_via_operator IS NULL
+      AND operator_fact_country IS NULL
+      AND type(aircraft_variant_operator_aircraft_model_fact) = $kinematic_fact_relationship_type
+      AND aircraft_variant_operator_aircraft_model_fact.predicate IN $operator_aircraft_model_fact_predicates
+      AND any(label IN labels(aircraft_variant_operator_from_fact) WHERE label = 'Operator')
+    OPTIONAL MATCH (aircraft_variant_operator_from_fact)-[aircraft_variant_operator_fact_country_relationship]-(aircraft_variant_operator_fact_country)
+    WHERE operator_country IS NULL
+      AND operator_country_via_operator IS NULL
+      AND operator_fact_country IS NULL
+      AND type(aircraft_variant_operator_fact_country_relationship) IN $operator_country_via_operator_relationship_types
+      AND any(label IN labels(aircraft_variant_operator_fact_country) WHERE label = 'Country')
+    WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, operator_from_aircraft_model_fact, operator_fact_country, aircraft_variant_operator, aircraft_variant_operator_country, aircraft_variant_country_via_operator, aircraft_variant_operator_from_fact, aircraft_variant_operator_fact_country, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
     OPTIONAL MATCH (kinematic_subject)-[kinematic_fact]->(kinematic_value)
     WHERE kinematic_subject IN [platform, aircraft_variant]
@@ -324,8 +344,10 @@ def graph_hypothesis_query(
          coalesce(emitter_variant.name, emitter_variant.id, properties(emitter_variant)['title'], emitter.name, emitter.id, properties(emitter)['title']) AS emitter_variant,
          coalesce(operator_country.name, operator_country.id, properties(operator_country)['title'],
                   operator_country_via_operator.name, operator_country_via_operator.id, properties(operator_country_via_operator)['title'],
+                  operator_fact_country.name, operator_fact_country.id, properties(operator_fact_country)['title'],
                   aircraft_variant_operator_country.name, aircraft_variant_operator_country.id, properties(aircraft_variant_operator_country)['title'],
                   aircraft_variant_country_via_operator.name, aircraft_variant_country_via_operator.id, properties(aircraft_variant_country_via_operator)['title'],
+                  aircraft_variant_operator_fact_country.name, aircraft_variant_operator_fact_country.id, properties(aircraft_variant_operator_fact_country)['title'],
                   'Unknown') AS operator_nation,
          collect(DISTINCT coalesce(emitter.name, emitter.id, properties(emitter)['title'])) AS matched_aliases,
          count(DISTINCT platform_path) AS support_count,
@@ -334,14 +356,18 @@ def graph_hypothesis_query(
          CASE WHEN aircraft_variant IS NULL THEN [] ELSE labels(aircraft_variant) END AS aircraft_variant_labels,
          CASE
              WHEN operator IS NOT NULL THEN labels(operator)
+             WHEN operator_from_aircraft_model_fact IS NOT NULL THEN labels(operator_from_aircraft_model_fact)
              WHEN aircraft_variant_operator IS NOT NULL THEN labels(aircraft_variant_operator)
+             WHEN aircraft_variant_operator_from_fact IS NOT NULL THEN labels(aircraft_variant_operator_from_fact)
              ELSE []
          END AS operator_labels,
          CASE
              WHEN operator_country IS NOT NULL THEN labels(operator_country)
              WHEN operator_country_via_operator IS NOT NULL THEN labels(operator_country_via_operator)
+             WHEN operator_fact_country IS NOT NULL THEN labels(operator_fact_country)
              WHEN aircraft_variant_operator_country IS NOT NULL THEN labels(aircraft_variant_operator_country)
              WHEN aircraft_variant_country_via_operator IS NOT NULL THEN labels(aircraft_variant_country_via_operator)
+             WHEN aircraft_variant_operator_fact_country IS NOT NULL THEN labels(aircraft_variant_operator_fact_country)
              ELSE []
          END AS operator_country_labels,
          max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score,
@@ -409,6 +435,10 @@ def graph_hypothesis_query(
             "LOCATED_IN",
         ],
         "kinematic_fact_relationship_type": "FACT",
+        "operator_aircraft_model_fact_predicates": [
+            "OPERATED_BY_AIRCRAFT_MODEL",
+            "AIRCRAFT_MODEL_OPERATED_BY",
+        ],
         "limit": int(limit),
     }
 
