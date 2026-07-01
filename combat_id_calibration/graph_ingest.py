@@ -463,6 +463,39 @@ def write_facts_jsonl(facts: Sequence[ExtractedFact], path: str | Path) -> None:
     Path(path).write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
+def load_facts_jsonl(path: str | Path) -> list[ExtractedFact]:
+    """Load extracted facts previously persisted as JSONL records."""
+
+    facts: list[ExtractedFact] = []
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid JSON on facts JSONL line {line_number}: {error.msg}") from error
+        if not isinstance(row, dict):
+            raise ValueError(f"facts JSONL line {line_number} must contain a JSON object")
+        try:
+            facts.append(
+                ExtractedFact(
+                    subject=str(row["subject"]),
+                    predicate=str(row["predicate"]),
+                    object=str(row["object"]),
+                    source_id=str(row["source_id"]),
+                    source_type=str(row["source_type"]),
+                    locator=str(row["locator"]),
+                    evidence=str(row.get("evidence", "")),
+                    confidence=float(row.get("confidence", 0.0)),
+                )
+            )
+        except KeyError as error:
+            raise ValueError(f"facts JSONL line {line_number} is missing required field {error.args[0]!r}") from error
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"facts JSONL line {line_number} has invalid field values") from error
+    return facts
+
+
 def create_neo4j_schema(session: object) -> None:
     """Create constraints for the reference/evidence ontology."""
 
