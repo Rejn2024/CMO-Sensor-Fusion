@@ -7,9 +7,12 @@ import pytest
 from combat_id_calibration.graph_ingest import _COUNTRY_NAMES
 from combat_id_calibration.llm_explainer import build_explanation_payload
 from combat_id_calibration.probability_model import (
+    _MIG29_SU27_OPERATOR_NATIONS,
+    _KNOWN_OPERATOR_NATION_BORDER_POLYGONS,
     OPERATOR_NATION_CENTROIDS,
     PROBABILITY_SCHEMA,
     group_feature_rows,
+    border_distance_km,
     haversine_distance_km,
     operator_nation_distance_evidence,
     platform_operator_nation_distribution,
@@ -49,9 +52,23 @@ def test_operator_nation_centroids_cover_country_names():
     assert missing == set()
     assert OPERATOR_NATION_CENTROIDS["belarus"] == pytest.approx((53.7098, 27.9534))
 
+
+def test_mig29_su27_operator_nations_have_border_polygons():
+    missing = _MIG29_SU27_OPERATOR_NATIONS - set(_KNOWN_OPERATOR_NATION_BORDER_POLYGONS)
+
+    assert missing == set()
+    assert "china" in _KNOWN_OPERATOR_NATION_BORDER_POLYGONS
+
 def test_haversine_distance_km_measures_great_circle_distance():
     assert haversine_distance_km(53.7098, 27.9534, 53.7098, 27.9534) == pytest.approx(0.0)
     assert haversine_distance_km(0.0, 0.0, 0.0, 1.0) == pytest.approx(111.195, abs=0.01)
+
+
+def test_border_distance_km_measures_nearest_border_segment():
+    square_border = ((0.0, 0.0), (0.0, 2.0), (2.0, 2.0), (2.0, 0.0))
+
+    assert border_distance_km(1.0, 1.0, square_border) == pytest.approx(111.18, abs=0.01)
+    assert border_distance_km(0.0, 1.0, square_border) == pytest.approx(0.0)
 
 
 def test_operator_nation_distance_evidence_uses_emitter_observation_coordinates():
@@ -61,8 +78,27 @@ def test_operator_nation_distance_evidence_uses_emitter_observation_coordinates(
     )
 
     assert evidence is not None
-    assert evidence["operator_nation_distance_km"] < 5
-    assert evidence["operator_nation_distance_score"] > 0.99
+    assert evidence["operator_nation_distance_reference"] == "border"
+    assert evidence["operator_nation_distance_km"] == pytest.approx(137.44, abs=0.01)
+    assert evidence["operator_nation_distance_score"] == pytest.approx(0.9465, abs=0.001)
+
+
+def test_operator_nation_distance_evidence_prefers_row_supplied_border_coordinates_over_centroid():
+    evidence = operator_nation_distance_evidence(
+        {
+            "emission_latitude": 0.0,
+            "emission_longitude": 1.0,
+            "operator_nation_latitude": 30.0,
+            "operator_nation_longitude": 30.0,
+            "operator_nation_border_coordinates": [[0.0, 0.0], [0.0, 2.0]],
+        },
+        "Nation With No Built In Border",
+    )
+
+    assert evidence is not None
+    assert evidence["operator_nation_distance_reference"] == "border"
+    assert evidence["operator_nation_distance_km"] == pytest.approx(0.0)
+    assert evidence["operator_nation_distance_score"] == pytest.approx(1.0)
 
 
 def test_platform_operator_nation_distribution_adjusts_logits_with_distance_evidence():
