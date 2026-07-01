@@ -4,10 +4,14 @@ import sys
 
 import pytest
 
+from combat_id_calibration.graph_ingest import _COUNTRY_NAMES
 from combat_id_calibration.llm_explainer import build_explanation_payload
 from combat_id_calibration.probability_model import (
+    OPERATOR_NATION_CENTROIDS,
     PROBABILITY_SCHEMA,
     group_feature_rows,
+    haversine_distance_km,
+    operator_nation_distance_evidence,
     platform_operator_nation_distribution,
 )
 
@@ -36,6 +40,65 @@ def candidate_rows():
             "evidence_query_id": "q2",
         },
     ]
+
+
+
+def test_operator_nation_centroids_cover_country_names():
+    missing = {country_name for country_name in _COUNTRY_NAMES if country_name.casefold() not in OPERATOR_NATION_CENTROIDS}
+
+    assert missing == set()
+    assert OPERATOR_NATION_CENTROIDS["belarus"] == pytest.approx((53.7098, 27.9534))
+
+def test_haversine_distance_km_measures_great_circle_distance():
+    assert haversine_distance_km(53.7098, 27.9534, 53.7098, 27.9534) == pytest.approx(0.0)
+    assert haversine_distance_km(0.0, 0.0, 0.0, 1.0) == pytest.approx(111.195, abs=0.01)
+
+
+def test_operator_nation_distance_evidence_uses_emitter_observation_coordinates():
+    evidence = operator_nation_distance_evidence(
+        {"emission_latitude": 53.7, "emission_longitude": 28.0},
+        "Belarus",
+    )
+
+    assert evidence is not None
+    assert evidence["operator_nation_distance_km"] < 5
+    assert evidence["operator_nation_distance_score"] > 0.99
+
+
+def test_platform_operator_nation_distribution_adjusts_logits_with_distance_evidence():
+    rows = [
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "near-platform",
+            "operator_nation": "Belarus",
+            "feature_logit": 0.0,
+            "emission_latitude": 53.7,
+            "emission_longitude": 28.0,
+            "evidence_query_id": "near",
+        },
+        {
+            "scenario_id": "s",
+            "contact_id": "c",
+            "observation_time": "t",
+            "hypothesis": "far-platform",
+            "operator_nation": "United States",
+            "feature_logit": 0.0,
+            "emission_latitude": 53.7,
+            "emission_longitude": 28.0,
+            "evidence_query_id": "far",
+        },
+    ]
+
+    result = platform_operator_nation_distribution(rows)
+
+    assert result["top_operator_nation"] == "Belarus"
+    assert result["operator_nation_probabilities"]["Belarus"] > result["operator_nation_probabilities"]["United States"]
+    near_candidate = next(candidate for candidate in result["candidates"] if candidate["evidence_query_id"] == "near")
+    far_candidate = next(candidate for candidate in result["candidates"] if candidate["evidence_query_id"] == "far")
+    assert near_candidate["logit"] > far_candidate["logit"]
+    assert near_candidate["operator_nation_distance_km"] < far_candidate["operator_nation_distance_km"]
 
 
 def test_platform_operator_nation_distribution_assigns_platform_and_origin_probabilities():
