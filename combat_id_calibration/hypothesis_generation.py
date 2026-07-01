@@ -97,6 +97,46 @@ def _semantic_alias_variants(text: str) -> list[str]:
     return variants
 
 
+_INVALID_PLATFORM_LABELS = {"COUNTRY", "SENSOR", "OPERATOR", "LOCATION"}
+_PLATFORM_LABELS = {"PLATFORM", "AIRCRAFT", "CANDIDATEIDENTITY"}
+_COUNTRY_LABELS = {"COUNTRY"}
+_UNKNOWN_OPERATOR_NATIONS = {"", "UNKNOWN", "UNK", "N/A", "NONE"}
+
+
+def _labels(row: Mapping[str, Any], key: str) -> set[str]:
+    value = row.get(key) or []
+    if isinstance(value, str):
+        value = [value]
+    return {str(label).strip().upper() for label in value if str(label).strip()}
+
+
+def _valid_graph_hypothesis_row(row: Mapping[str, Any]) -> bool:
+    """Return True when graph labels are compatible with the candidate contract."""
+
+    platform_labels = _labels(row, "platform_labels")
+    if platform_labels:
+        if platform_labels & _INVALID_PLATFORM_LABELS:
+            return False
+        if not (platform_labels & _PLATFORM_LABELS):
+            return False
+
+    aircraft_variant_labels = _labels(row, "aircraft_variant_labels")
+    if aircraft_variant_labels:
+        if aircraft_variant_labels & _INVALID_PLATFORM_LABELS:
+            return False
+        if not (aircraft_variant_labels & _PLATFORM_LABELS):
+            return False
+
+    operator_nation = str(row.get("operator_nation") or "").strip().upper()
+    operator_country_labels = _labels(row, "operator_country_labels")
+    if operator_nation not in _UNKNOWN_OPERATOR_NATIONS:
+        if operator_country_labels and not (operator_country_labels & _COUNTRY_LABELS):
+            return False
+        if _labels(row, "operator_labels") & {"SENSOR"}:
+            return False
+
+    return True
+
 def graph_hypothesis_query(
     aliases: Sequence[str],
     relationship_types: Sequence[str] | int | None = None,
@@ -122,15 +162,19 @@ def graph_hypothesis_query(
          [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
          [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
-    OPTIONAL MATCH platform_path = (emitter)-{platform_path_pattern}-(platform)
-    WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
+    OPTIONAL MATCH platform_path = (platform)-{platform_path_pattern}-(emitter)
+    WHERE any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft'])
+      AND none(label IN labels(platform) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])
     OPTIONAL MATCH (platform)-[:VARIANT_OF|HAS_VARIANT|AIRCRAFT_FAMILY*0..1]-(aircraft_variant)
-    WHERE aircraft_variant IS NULL OR any(label IN labels(aircraft_variant) WHERE label IN ['Platform', 'Aircraft', 'Entity', 'CandidateIdentity'])
+    WHERE aircraft_variant IS NULL OR (
+        any(label IN labels(aircraft_variant) WHERE label IN ['Platform', 'Aircraft'])
+        AND none(label IN labels(aircraft_variant) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])
+    )
     OPTIONAL MATCH (emitter)-[:VARIANT_OF|HAS_VARIANT|ALSO_KNOWN_AS*0..1]-(emitter_variant)
     WHERE emitter_variant IS NULL OR any(label IN labels(emitter_variant) WHERE label IN ['Sensor', 'Entity'])
-    OPTIONAL MATCH (platform)-[:OPERATED_BY|OPERATOR|USED_BY|SERVICE_WITH|ASSIGNED_TO]-(operator)
-    OPTIONAL MATCH (platform)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY]-(operator_country)
-    OPTIONAL MATCH (operator)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY|LOCATED_IN]-(operator_country_via_operator)
+    OPTIONAL MATCH (platform)-[:OPERATED_BY|OPERATOR|USED_BY|SERVICE_WITH|ASSIGNED_TO]-(operator:Operator)
+    OPTIONAL MATCH (platform)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY]-(operator_country:Country)
+    OPTIONAL MATCH (operator)-[:OPERATOR_COUNTRY|HOME_BASE_COUNTRY|LOCATED_IN]-(operator_country_via_operator:Country)
     WITH emitter, platform, aircraft_variant, emitter_variant, operator, operator_country, operator_country_via_operator, platform_path, exact_aliases, matched_tokens
     WHERE platform IS NOT NULL
     OPTIONAL MATCH (kinematic_subject)-[kinematic_fact:FACT]->(kinematic_value)
@@ -141,11 +185,18 @@ def graph_hypothesis_query(
          coalesce(emitter_variant.name, emitter_variant.id, emitter_variant.title, emitter.name, emitter.id, emitter.title) AS emitter_variant,
          coalesce(operator_country.name, operator_country.id, operator_country.title,
                   operator_country_via_operator.name, operator_country_via_operator.id, operator_country_via_operator.title,
-                  operator.name, operator.id, operator.title, 'Unknown') AS operator_nation,
+                  'Unknown') AS operator_nation,
          collect(DISTINCT coalesce(emitter.name, emitter.id, emitter.title)) AS matched_aliases,
          count(DISTINCT platform_path) AS support_count,
          collect(DISTINCT [rel IN relationships(platform_path) | type(rel)]) AS evidence_paths,
          labels(platform) AS platform_labels,
+         CASE WHEN aircraft_variant IS NULL THEN [] ELSE labels(aircraft_variant) END AS aircraft_variant_labels,
+         CASE WHEN operator IS NULL THEN [] ELSE labels(operator) END AS operator_labels,
+         CASE
+             WHEN operator_country IS NOT NULL THEN labels(operator_country)
+             WHEN operator_country_via_operator IS NOT NULL THEN labels(operator_country_via_operator)
+             ELSE []
+         END AS operator_country_labels,
          max(size(exact_aliases) * 10 + size(matched_tokens)) AS semantic_match_score,
          collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'MAX_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS max_speed_kt_values,
          collect(DISTINCT CASE WHEN kinematic_fact.predicate = 'TYPICAL_SPEED_KT' THEN coalesce(kinematic_value.name, kinematic_value.id, kinematic_value.title) END) AS typical_speed_kt_values,
@@ -161,6 +212,9 @@ def graph_hypothesis_query(
            support_count,
            evidence_paths,
            platform_labels,
+           aircraft_variant_labels,
+           operator_labels,
+           operator_country_labels,
            semantic_match_score,
            max_speed_kt_values,
            typical_speed_kt_values,
@@ -384,6 +438,8 @@ def fetch_graph_hypotheses_with_session(
     rows = _rows(session.run(query, **params))
     hypotheses: list[dict[str, object]] = []
     for row in rows:
+        if not _valid_graph_hypothesis_row(row):
+            continue
         hypothesis = str(row.get("hypothesis") or "").strip()
         if not hypothesis:
             continue

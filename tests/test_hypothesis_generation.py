@@ -52,6 +52,8 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "$emitter_aliases" in query
     assert "$limit" in query
     assert "Platform" in query
+    assert "Entity', 'CandidateIdentity" not in query
+    assert "none(label IN labels(platform) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])" in query
     assert "OPERATED_BY" in query
     assert "OPERATOR_COUNTRY" in query
     assert "VARIANT_OF" in query
@@ -72,7 +74,7 @@ def test_graph_hypothesis_query_can_limit_platform_path_relationship_types():
         ["N-010 Zhuk-M"], ["HAS_SENSOR", "HAS_PLATFORM"], 10
     )
 
-    assert "(emitter)-[:HAS_SENSOR|HAS_PLATFORM*1..3]-(platform)" in query
+    assert "(platform)-[:HAS_SENSOR|HAS_PLATFORM*1..3]-(emitter)" in query
     assert params["limit"] == 10
 
 
@@ -108,6 +110,9 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
                     "matched_aliases": ["N-010 Zhuk-M"],
                     "support_count": 3,
                     "evidence_paths": [["HAS_SENSOR"]],
+                    "platform_labels": ["Platform"],
+                    "aircraft_variant_labels": ["Platform"],
+                    "operator_country_labels": ["Country"],
                     "semantic_match_score": 0.0,
                     "max_speed_kt_values": ["Mach 2.25 (1,320 kt)"],
                     "service_ceiling_m_values": ["57,400 ft (17,500 m)"],
@@ -141,6 +146,48 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
             "semantic_match_score": 0.0,
         }
     ]
+
+
+def test_fetch_graph_hypotheses_rejects_country_platform_and_sensor_operator_rows():
+    observation = parse_observation_line(SAMPLE, source_line=1)
+    session = RecordingSession(
+        [
+            [
+                {
+                    "hypothesis": "India",
+                    "operator_nation": "Zhuk-ME",
+                    "aircraft_variant": "India",
+                    "emitter_variant": "N010 Zhuk",
+                    "matched_aliases": ["N010 Zhuk"],
+                    "support_count": 1,
+                    "evidence_paths": [["USES_RADAR", "VARIANT_OF", "OPERATOR_COUNTRY"]],
+                    "platform_labels": ["Entity", "Country"],
+                    "aircraft_variant_labels": ["Country"],
+                    "operator_labels": ["Sensor"],
+                    "operator_country_labels": ["Sensor"],
+                    "semantic_match_score": 42.0,
+                },
+                {
+                    "hypothesis": "MiG-29SMT",
+                    "operator_nation": "Russia",
+                    "aircraft_variant": "MiG-29SMT",
+                    "emitter_variant": "N-010 Zhuk-ME",
+                    "matched_aliases": ["N-010 Zhuk-M"],
+                    "support_count": 3,
+                    "evidence_paths": [["HAS_SENSOR"]],
+                    "platform_labels": ["Platform"],
+                    "aircraft_variant_labels": ["Aircraft"],
+                    "operator_country_labels": ["Country"],
+                    "semantic_match_score": 10.0,
+                },
+            ]
+        ]
+    )
+
+    rows = fetch_graph_hypotheses_with_session(session, observation, 10)
+
+    assert [row["hypothesis"] for row in rows] == ["MiG-29SMT"]
+    assert rows[0]["operator_nation"] == "Russia"
 
 
 def test_evidence_paths_query_id_handles_nested_graph_paths_and_seed_strings():

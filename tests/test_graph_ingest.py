@@ -9,6 +9,7 @@ from combat_id_calibration.graph_ingest import (
     _ollama_response_text,
     _validate_neo4j_credentials,
     _write_fact,
+    _looks_like_country,
     build_extraction_prompt,
     chunk_text,
     extract_facts,
@@ -266,6 +267,15 @@ def test_load_facts_jsonl_reports_invalid_records(tmp_path):
         load_facts_jsonl(path)
 
 
+def test_country_name_guard_covers_current_country_names_and_common_aliases():
+    assert _looks_like_country("Andorra")
+    assert _looks_like_country("South Sudan")
+    assert _looks_like_country("Sao Tome and Principe")
+    assert _looks_like_country("Türkiye")
+    assert _looks_like_country("Holy See")
+    assert _looks_like_country("United States of America")
+
+
 def test_write_fact_emits_parameterized_neo4j_cypher():
     tx = RecordingRunner()
     fact = ExtractedFact(
@@ -291,6 +301,44 @@ def test_write_fact_emits_parameterized_neo4j_cypher():
     typed_statement, typed_parameters = tx.calls[1]
     assert "MERGE (subject)-[rel:HAS_SENSOR]->(object)" in typed_statement
     assert typed_parameters["object_is_sensor"] is True
+
+
+def test_write_fact_keeps_audit_fact_but_skips_incompatible_typed_relation():
+    tx = RecordingRunner()
+    fact = ExtractedFact(
+        subject="India",
+        predicate="USES_RADAR",
+        object="Zhuk-ME",
+        source_id="source-1",
+        source_type="wikipedia",
+        locator="https://example.test/wiki/Zhuk",
+        evidence="Bad extraction that treats a country as a radar-using platform.",
+        confidence=0.4,
+    )
+
+    _write_fact(tx, fact)
+
+    assert len(tx.calls) == 1
+    assert "CREATE (subject)-[:FACT" in tx.calls[0][0]
+
+
+def test_write_fact_requires_country_object_for_operator_country_typed_relation():
+    tx = RecordingRunner()
+    fact = ExtractedFact(
+        subject="MiG-29",
+        predicate="OPERATOR_COUNTRY",
+        object="Zhuk-ME",
+        source_id="source-1",
+        source_type="wikipedia",
+        locator="https://example.test/wiki/MiG-29",
+        evidence="Bad extraction that treats a radar as a country.",
+        confidence=0.4,
+    )
+
+    _write_fact(tx, fact)
+
+    assert len(tx.calls) == 1
+    assert "CREATE (subject)-[:FACT" in tx.calls[0][0]
 
 
 def test_neo4j_connection_error_message_is_actionable():
