@@ -49,7 +49,7 @@ def test_emitter_aliases_extracts_full_bracketed_prefix_and_semantic_aliases():
 def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence():
     query, params = graph_hypothesis_query(["N-010 Zhuk-M"], 10)
 
-    assert "$emitter_aliases" in query
+    assert "$emitter_alias_match_terms" in query
     assert "$limit" in query
     assert "Platform" in query
     assert "Entity', 'CandidateIdentity" not in query
@@ -72,7 +72,9 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     assert "SERVICE_CEILING_M" in query
     assert params == {
         "emitter_aliases": ["N-010 Zhuk-M"],
+        "emitter_alias_match_terms": ["n 010 zhuk m"],
         "emitter_semantic_tokens": ["n010", "zhuk"],
+        "minimum_reverse_alias_chars": 3,
         "minimum_semantic_token_matches": 2,
         "platform_relationship_types": [],
         "aircraft_variant_relationship_types": [
@@ -106,12 +108,59 @@ def test_graph_hypothesis_query_is_parameterized_and_requests_platform_evidence(
     }
 
 
+def test_graph_hypothesis_query_rejects_tiny_reverse_substring_alias_matches():
+    query, params = graph_hypothesis_query(
+        emitter_aliases("Slot Back [N-010 Zhuk-M]"), 10
+    )
+
+    assert "alias CONTAINS normalized_emitter_name" in query
+    assert (
+        "size(replace(normalized_emitter_name, ' ', '')) >= $minimum_reverse_alias_chars"
+        in query
+    )
+    assert params["minimum_reverse_alias_chars"] == 3
+    assert "n 010 zhuk m" in params["emitter_alias_match_terms"]
+
+
+def test_select_offline_hypotheses_dampens_support_for_tiny_alias_false_positive():
+    observation = parse_observation_line(SAMPLE, source_line=1)
+    candidates = [
+        {
+            "hypothesis": "CAESAR",
+            "operator_nation": "Unknown",
+            "aircraft_variant": "CAESAR",
+            "emitter_variant": "10",
+            "emitter_aliases": ["10"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [0.0, 2500.0],
+            "typical_altitude_m": [0.0, 25000.0],
+            "kg_support_count": 50,
+        },
+        {
+            "hypothesis": "MiG-29K/KUB",
+            "operator_nation": "Unknown",
+            "aircraft_variant": "MiG-29K/KUB",
+            "emitter_variant": "Zhuk",
+            "emitter_aliases": ["Zhuk"],
+            "platform_class": "Type: Multirole (Fighter/Attack)",
+            "typical_speed_kt": [0.0, 2500.0],
+            "typical_altitude_m": [0.0, 25000.0],
+            "kg_support_count": 7,
+        },
+    ]
+
+    assert (
+        select_offline_hypotheses(observation, candidates, 1)[0]["hypothesis"]
+        == "MiG-29K/KUB"
+    )
+
+
 def test_graph_hypothesis_query_can_limit_platform_path_relationship_types():
     query, params = graph_hypothesis_query(
         ["N-010 Zhuk-M"], ["HAS_SENSOR", "HAS_PLATFORM"], 10
     )
 
-    assert "OPTIONAL MATCH platform_path = (platform)-[*1..3]-(emitter)" in query
+    assert "OPTIONAL MATCH platform_path = (platform)-[*1..4]-(emitter)" in query
     assert "type(rel) IN $platform_relationship_types" in query
     assert "HAS_SENSOR" not in query
     assert params["platform_relationship_types"] == ["HAS_SENSOR", "HAS_PLATFORM"]
