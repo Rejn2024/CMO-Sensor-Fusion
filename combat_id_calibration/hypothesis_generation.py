@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -217,6 +218,35 @@ def _valid_graph_hypothesis_row(row: Mapping[str, Any]) -> bool:
 
     return True
 
+
+def _normalized_alias_match_terms(aliases: Sequence[str]) -> list[str]:
+    """Return lower-case, punctuation-normalized aliases for graph matching."""
+
+    terms: list[str] = []
+    for alias in aliases:
+        normalized = re.sub(r"[-_/\[\]().]", " ", str(alias).lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized and normalized not in terms:
+            terms.append(normalized)
+    return terms
+
+
+def _compact_alias_length(alias: str) -> int:
+    """Return the alphanumeric length used to reject tiny substring aliases."""
+
+    return len(re.sub(r"[^a-z0-9]", "", alias.lower()))
+
+
+def _safe_alias_substring_match(
+    alias: str, sensor_name: str, minimum_chars: int = 3
+) -> bool:
+    """Return whether alias is specific enough to count as a substring match."""
+
+    if _compact_alias_length(alias) < minimum_chars:
+        return False
+    return alias in sensor_name
+
+
 def graph_hypothesis_query(
     aliases: Sequence[str],
     relationship_types: Sequence[str] | int | None = None,
@@ -240,7 +270,11 @@ def graph_hypothesis_query(
          reduce(normalized = emitter_name, punctuation IN ['-', '_', '/', '[', ']', '(', ')', '.'] | replace(normalized, punctuation, ' ')) AS normalized_emitter_name
     WITH emitter, emitter_name, normalized_emitter_name,
          [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
-         [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
+         [alias IN $emitter_alias_match_terms
+          WHERE normalized_emitter_name = alias
+             OR normalized_emitter_name CONTAINS alias
+             OR (alias CONTAINS normalized_emitter_name
+                 AND size(replace(normalized_emitter_name, ' ', '')) >= $minimum_reverse_alias_chars)] AS exact_aliases
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
     OPTIONAL MATCH platform_path = (platform)-[*1..4]-(emitter)
     WHERE (size($platform_relationship_types) = 0 OR all(rel IN relationships(platform_path) WHERE type(rel) IN $platform_relationship_types))
@@ -318,7 +352,9 @@ def graph_hypothesis_query(
     semantic_tokens = emitter_semantic_tokens(aliases)
     return query, {
         "emitter_aliases": list(aliases),
+        "emitter_alias_match_terms": _normalized_alias_match_terms(aliases),
         "emitter_semantic_tokens": semantic_tokens,
+        "minimum_reverse_alias_chars": 3,
         "minimum_semantic_token_matches": (
             min(2, len(semantic_tokens)) if semantic_tokens else 1
         ),
@@ -667,7 +703,9 @@ def select_offline_hypotheses(
             else 0.0
         )
         alias_score = max(
-            1.0 if any(alias and alias in sensor_name for alias in aliases) else 0.0,
+            1.0
+            if any(_safe_alias_substring_match(alias, sensor_name) for alias in aliases)
+            else 0.0,
             token_score,
         )
         class_score = (
@@ -677,7 +715,7 @@ def select_offline_hypotheses(
         )
         speed_low, speed_high = candidate.get("typical_speed_kt", [0.0, 2500.0])
         alt_low, alt_high = candidate.get("typical_altitude_m", [0.0, 25000.0])
-        kg_score = float(candidate.get("kg_support_count") or 0.0)
+        kg_score = math.log1p(max(float(candidate.get("kg_support_count") or 0.0), 0.0))
         return (
             kg_score
             + alias_score * 3.0
