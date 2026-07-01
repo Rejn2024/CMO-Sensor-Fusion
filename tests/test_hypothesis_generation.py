@@ -148,6 +148,49 @@ def test_fetch_graph_hypotheses_with_session_normalizes_rows_for_candidate_contr
     ]
 
 
+def test_fetch_graph_hypotheses_strips_operator_phrases_from_aircraft_variant_and_infers_country():
+    observation = parse_observation_line(SAMPLE, source_line=1)
+    session = RecordingSession(
+        [
+            [
+                {
+                    "hypothesis": "MiG-29K",
+                    "operator_nation": "Unknown",
+                    "aircraft_variant": "carrier-based variants for Indian Navy",
+                    "emitter_variant": "N-010 Zhuk-ME",
+                    "matched_aliases": ["N-010 Zhuk-M"],
+                    "support_count": 3,
+                    "evidence_paths": [["HAS_SENSOR", "OPERATOR_COUNTRY"]],
+                    "platform_labels": ["Platform"],
+                    "aircraft_variant_labels": ["Aircraft"],
+                    "operator_country_labels": [],
+                    "semantic_match_score": 10.0,
+                },
+                {
+                    "hypothesis": "F-16",
+                    "operator_nation": "Unknown",
+                    "aircraft_variant": "Romanian Air Force (RoAF)",
+                    "emitter_variant": "AN/APG-68",
+                    "matched_aliases": ["AN/APG-68"],
+                    "support_count": 2,
+                    "evidence_paths": [["HAS_SENSOR", "OPERATED_BY"]],
+                    "platform_labels": ["Platform"],
+                    "aircraft_variant_labels": ["Aircraft"],
+                    "operator_country_labels": [],
+                    "semantic_match_score": 9.0,
+                },
+            ]
+        ]
+    )
+
+    rows = fetch_graph_hypotheses_with_session(session, observation, 10)
+
+    assert rows[0]["aircraft_variant"] == "MiG-29K"
+    assert rows[0]["operator_nation"] == "India"
+    assert rows[1]["aircraft_variant"] == "F-16"
+    assert rows[1]["operator_nation"] == "Romania"
+
+
 def test_fetch_graph_hypotheses_rejects_country_platform_and_sensor_operator_rows():
     observation = parse_observation_line(SAMPLE, source_line=1)
     session = RecordingSession(

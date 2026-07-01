@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .cmo_observation_ingest import EmissionObservation
-from .graph_ingest import _neo4j_connection_error_message, _validate_neo4j_credentials
+from .graph_ingest import (
+    _COUNTRY_NAMES,
+    _neo4j_connection_error_message,
+    _validate_neo4j_credentials,
+)
 
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -101,6 +105,77 @@ _INVALID_PLATFORM_LABELS = {"COUNTRY", "SENSOR", "OPERATOR", "LOCATION"}
 _PLATFORM_LABELS = {"PLATFORM", "AIRCRAFT", "CANDIDATEIDENTITY"}
 _COUNTRY_LABELS = {"COUNTRY"}
 _UNKNOWN_OPERATOR_NATIONS = {"", "UNKNOWN", "UNK", "N/A", "NONE"}
+
+_NATION_DERIVED_OPERATOR_TERMS = {
+    "AMERICAN": "United States",
+    "UNITED STATES": "United States",
+    "US": "United States",
+    "U.S.": "United States",
+    "U S": "United States",
+    "BRITISH": "United Kingdom",
+    "UNITED KINGDOM": "United Kingdom",
+    "UK": "United Kingdom",
+    "INDIAN": "India",
+    "INDIA": "India",
+    "ROMANIAN": "Romania",
+    "ROMANIA": "Romania",
+    "RUSSIAN": "Russia",
+    "RUSSIA": "Russia",
+    "CHINESE": "China",
+    "CHINA": "China",
+    "FRENCH": "France",
+    "FRANCE": "France",
+    "GERMAN": "Germany",
+    "GERMANY": "Germany",
+    "ITALIAN": "Italy",
+    "ITALY": "Italy",
+    "JAPANESE": "Japan",
+    "JAPAN": "Japan",
+    "AUSTRALIAN": "Australia",
+    "AUSTRALIA": "Australia",
+    "CANADIAN": "Canada",
+    "CANADA": "Canada",
+    "PAKISTANI": "Pakistan",
+    "PAKISTAN": "Pakistan",
+    "TURKISH": "Turkey",
+    "TURKEY": "Turkey",
+    "TÜRKIYE": "Türkiye",
+    "ISRAELI": "Israel",
+    "ISRAEL": "Israel",
+    "EGYPTIAN": "Egypt",
+    "EGYPT": "Egypt",
+    "IRANIAN": "Iran",
+    "IRAN": "Iran",
+    "IRAQI": "Iraq",
+    "IRAQ": "Iraq",
+    "SAUDI": "Saudi Arabia",
+    "SAUDI ARABIA": "Saudi Arabia",
+    "SOUTH KOREAN": "South Korea",
+    "REPUBLIC OF KOREA": "South Korea",
+    "NORTH KOREAN": "North Korea",
+}
+for _country_name in _COUNTRY_NAMES:
+    _NATION_DERIVED_OPERATOR_TERMS.setdefault(_country_name, _country_name.title())
+
+
+def _operator_nation_from_text(text: object) -> str | None:
+    normalized = re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()).strip()
+    if not normalized:
+        return None
+    for term in sorted(_NATION_DERIVED_OPERATOR_TERMS, key=len, reverse=True):
+        if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", normalized):
+            return _NATION_DERIVED_OPERATOR_TERMS[term]
+    return None
+
+
+def _aircraft_variant_without_operator_terms(
+    variant: object, fallback: str
+) -> tuple[str, str | None]:
+    variant_text = str(variant or "").strip()
+    inferred_operator_nation = _operator_nation_from_text(variant_text)
+    if inferred_operator_nation:
+        return fallback, inferred_operator_nation
+    return (variant_text or fallback), None
 
 
 def _labels(row: Mapping[str, Any], key: str) -> set[str]:
@@ -443,11 +518,17 @@ def fetch_graph_hypotheses_with_session(
         hypothesis = str(row.get("hypothesis") or "").strip()
         if not hypothesis:
             continue
+        aircraft_variant, inferred_operator_nation = _aircraft_variant_without_operator_terms(
+            row.get("aircraft_variant"), hypothesis
+        )
+        operator_nation = str(row.get("operator_nation") or "Unknown").strip() or "Unknown"
+        if operator_nation.upper() in _UNKNOWN_OPERATOR_NATIONS and inferred_operator_nation:
+            operator_nation = inferred_operator_nation
         hypotheses.append(
             {
                 "hypothesis": hypothesis,
-                "operator_nation": str(row.get("operator_nation") or "Unknown"),
-                "aircraft_variant": str(row.get("aircraft_variant") or hypothesis),
+                "operator_nation": operator_nation,
+                "aircraft_variant": aircraft_variant,
                 "emitter_variant": str(row.get("emitter_variant") or ""),
                 "emitter_aliases": list(row.get("matched_aliases") or []),
                 "platform_class": _observation_value(obs, "emission_target_type"),
