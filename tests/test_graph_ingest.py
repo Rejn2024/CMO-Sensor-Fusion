@@ -13,6 +13,7 @@ from combat_id_calibration.graph_ingest import (
     chunk_text,
     extract_facts,
     create_neo4j_schema,
+    load_facts_jsonl,
     parse_extracted_facts,
     stable_id,
 )
@@ -238,6 +239,31 @@ def test_create_neo4j_schema_uses_unique_constraints():
     assert "CREATE CONSTRAINT platform_entity_id IF NOT EXISTS FOR (p:Platform) REQUIRE p.id IS UNIQUE" in statements
     assert "CREATE CONSTRAINT sensor_entity_id IF NOT EXISTS FOR (s:Sensor) REQUIRE s.id IS UNIQUE" in statements
     assert "CREATE CONSTRAINT country_entity_id IF NOT EXISTS FOR (c:Country) REQUIRE c.id IS UNIQUE" in statements
+
+
+def test_load_facts_jsonl_round_trips_written_facts(tmp_path):
+    fact = ExtractedFact(
+        subject="MiG-29",
+        predicate="HAS_SENSOR",
+        object="N019 radar",
+        source_id="source-1",
+        source_type="wikipedia",
+        locator="https://example.test/wiki/MiG-29",
+        evidence="MiG-29 uses the N019 radar.",
+        confidence=0.9,
+    )
+    path = tmp_path / "facts.jsonl"
+    path.write_text("\n" + json.dumps(fact.__dict__) + "\n\n", encoding="utf-8")
+
+    assert load_facts_jsonl(path) == [fact]
+
+
+def test_load_facts_jsonl_reports_invalid_records(tmp_path):
+    path = tmp_path / "facts.jsonl"
+    path.write_text(json.dumps({"subject": "MiG-29"}) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="line 1 is missing required field 'predicate'"):
+        load_facts_jsonl(path)
 
 
 def test_write_fact_emits_parameterized_neo4j_cypher():
