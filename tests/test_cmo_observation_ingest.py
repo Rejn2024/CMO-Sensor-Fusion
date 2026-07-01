@@ -64,6 +64,8 @@ def test_write_observation_emits_phase_two_ontology_cypher():
     assert "HAS_OBSERVATION" in statement
     assert "OBSERVED_BY" in statement
     assert "EMITTED" in statement
+    assert "DETECTS" in statement
+    assert "MERGE (platform)-[:HAS_SENSOR]->(sensor)" not in statement
     assert "CLASSIFIED_AS" in statement
     assert parameters["sensor_aircraft"] == "Typhoon FGR.4"
     assert parameters["emission_sensor_name"] == "Slot Back [N-010 Zhuk-M]"
