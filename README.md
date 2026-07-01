@@ -70,7 +70,7 @@ The observation ontology maps the Lua fields as follows:
 
 - `Time` -> `Observation.time`
 - `Sensor_aircraft` -> `Platform` connected by `(:Observation)-[:OBSERVED_BY]->(:Platform)`
-- `Emission_sensor_name` -> `Sensor` and `Emission` connected by `HAS_SENSOR`, `EMITTED`, and `DETECTED_BY`
+- `Emission_sensor_name` -> `Sensor` and `Emission` connected by `DETECTS`, `EMITTED`, and `DETECTED_BY`; dynamic observation ingest uses `DETECTS` from the observing `Sensor_aircraft` platform to the observed emitter/sensor instead of asserting platform ownership with `HAS_SENSOR`
 - `Emission_age`, `Emission_solid`, latitude, longitude, heading, altitude, and speed -> `Observation` kinematic/evidence properties
 - `Emission_type` and `Emission_role` -> `Emission` properties
 - `Emission_target_type` and `Emission_classificationlevel` -> `PlatformClass` plus `CLASSIFIED_AS` evidence

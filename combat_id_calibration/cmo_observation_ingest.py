@@ -184,7 +184,7 @@ def _write_observation(tx: object, observation: EmissionObservation) -> None:
         MERGE (source:Source {id: $source_id}) SET source.source_type = $source, source.locator = $source_locator
         MERGE (contact)-[:HAS_OBSERVATION]->(obs)
         MERGE (obs)-[:OBSERVED_BY]->(platform)
-        MERGE (platform)-[:HAS_SENSOR]->(sensor)
+        MERGE (platform)-[:DETECTS]->(sensor)
         MERGE (contact)-[:EMITTED]->(emission)
         MERGE (emission)-[:DETECTED_BY]->(sensor)
         MERGE (obs)-[:DERIVED_FROM]->(source)
