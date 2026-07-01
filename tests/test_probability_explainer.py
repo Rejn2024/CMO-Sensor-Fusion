@@ -4,8 +4,10 @@ import sys
 
 import pytest
 
+from combat_id_calibration.graph_ingest import _COUNTRY_NAMES
 from combat_id_calibration.llm_explainer import build_explanation_payload
 from combat_id_calibration.probability_model import (
+    OPERATOR_NATION_CENTROIDS,
     PROBABILITY_SCHEMA,
     group_feature_rows,
     haversine_distance_km,
@@ -39,6 +41,13 @@ def candidate_rows():
         },
     ]
 
+
+
+def test_operator_nation_centroids_cover_country_names():
+    missing = {country_name for country_name in _COUNTRY_NAMES if country_name.casefold() not in OPERATOR_NATION_CENTROIDS}
+
+    assert missing == set()
+    assert OPERATOR_NATION_CENTROIDS["belarus"] == pytest.approx((53.7098, 27.9534))
 
 def test_haversine_distance_km_measures_great_circle_distance():
     assert haversine_distance_km(53.7098, 27.9534, 53.7098, 27.9534) == pytest.approx(0.0)

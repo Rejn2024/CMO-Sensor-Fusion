@@ -20,6 +20,7 @@ from typing import Iterable, Mapping, Sequence
 
 from .calibrator import TemperatureCalibrator, _softmax
 from .feature_extraction import ContactHypothesisFeatures, feature_logit
+from .graph_ingest import _COUNTRY_NAMES
 from .io import write_jsonl
 
 PROBABILITY_SCHEMA = "platform_operator_nation_probability_v1"
@@ -27,7 +28,7 @@ UNKNOWN_OPERATOR_NATION_LABELS = {"", "unknown", "unk", "n/a", "na", "none", "nu
 EARTH_RADIUS_KM = 6371.0088
 OPERATOR_NATION_DISTANCE_SCALE_KM = 2500.0
 OPERATOR_NATION_DISTANCE_LOGIT_WEIGHT = 1.0
-OPERATOR_NATION_CENTROIDS: dict[str, tuple[float, float]] = {
+_KNOWN_OPERATOR_NATION_CENTROIDS: dict[str, tuple[float, float]] = {
     "belarus": (53.7098, 27.9534),
     "china": (35.8617, 104.1954),
     "france": (46.2276, 2.2137),
@@ -46,9 +47,15 @@ OPERATOR_NATION_CENTROIDS: dict[str, tuple[float, float]] = {
     "turkey": (38.9637, 35.2433),
     "ukraine": (48.3794, 31.1656),
     "united kingdom": (55.3781, -3.4360),
+    "united kingdom of great britain and northern ireland": (55.3781, -3.4360),
     "uk": (55.3781, -3.4360),
     "united states": (37.0902, -95.7129),
+    "united states of america": (37.0902, -95.7129),
     "usa": (37.0902, -95.7129),
+}
+OPERATOR_NATION_CENTROIDS: dict[str, tuple[float, float]] = {
+    country_name.casefold(): _KNOWN_OPERATOR_NATION_CENTROIDS.get(country_name.casefold(), (0.0, 0.0))
+    for country_name in _COUNTRY_NAMES
 }
 
 
