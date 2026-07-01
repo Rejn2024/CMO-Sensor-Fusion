@@ -44,8 +44,8 @@ def _relationship_pattern(relationship_types: Sequence[str] | None) -> str:
 
     normalized = _normalized_relationship_types(relationship_types)
     if not normalized:
-        return "[*1..3]"
-    return f"[:{'|'.join(normalized)}*1..3]"
+        return "[*1..4]"
+    return f"[:{'|'.join(normalized)}*1..4]"
 
 
 def emitter_aliases(sensor_name: str) -> list[str]:
@@ -242,7 +242,7 @@ def graph_hypothesis_query(
          [token IN $emitter_semantic_tokens WHERE normalized_emitter_name CONTAINS token] AS matched_tokens,
          [alias IN $emitter_aliases WHERE emitter_name CONTAINS toLower(alias) OR toLower(alias) CONTAINS emitter_name] AS exact_aliases
     WHERE size(exact_aliases) > 0 OR size(matched_tokens) >= $minimum_semantic_token_matches
-    OPTIONAL MATCH platform_path = (platform)-[*1..3]-(emitter)
+    OPTIONAL MATCH platform_path = (platform)-[*1..4]-(emitter)
     WHERE (size($platform_relationship_types) = 0 OR all(rel IN relationships(platform_path) WHERE type(rel) IN $platform_relationship_types))
       AND any(label IN labels(platform) WHERE label IN ['Platform', 'Aircraft'])
       AND none(label IN labels(platform) WHERE label IN ['Country', 'Sensor', 'Operator', 'Location'])
@@ -547,9 +547,11 @@ def fetch_graph_hypotheses_with_session(
     relationship_types: Sequence[str] | None = None,
 ) -> list[dict[str, object]]:
     """Query a Neo4j session-like object for candidate hypotheses."""
+    ea = emitter_aliases(_observation_value(obs, "emission_sensor_name"))
+    print(f'emitter_aliases: {ea}')
 
     query, params = graph_hypothesis_query(
-        emitter_aliases(_observation_value(obs, "emission_sensor_name")),
+        ea,
         relationship_types,
         max(n * 4, n),
     )
