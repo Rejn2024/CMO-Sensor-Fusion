@@ -28,7 +28,7 @@ PROBABILITY_SCHEMA = "platform_operator_nation_probability_v1"
 UNKNOWN_OPERATOR_NATION_LABELS = {"", "unknown", "unk", "n/a", "na", "none", "null", "not specified", "unspecified"}
 EARTH_RADIUS_KM = 6371.0088
 OPERATOR_NATION_DISTANCE_SCALE_KM = 2000.0
-OPERATOR_NATION_DISTANCE_LOGIT_WEIGHT = 1.25
+OPERATOR_NATION_DISTANCE_LOGIT_WEIGHT = 1.0
 _MIG29_SU27_OPERATOR_NATIONS: frozenset[str] = frozenset(
     {
         "algeria",
@@ -431,7 +431,7 @@ def platform_operator_nation_distribution(
     base_logits = [feature_row_to_logit(row) for row in rows]
 
     print(f'operator_nations : {operator_nations}')
-    print(f'rows: {rows}')
+    # print(f'rows: {rows}')
     distance_evidence = [
         operator_nation_distance_evidence(row, operator_nation) for row, operator_nation in zip(rows, operator_nations)
     ]
