@@ -1,0 +1,85 @@
+Probability Model Theory Summary
+================================
+
+File summarized: combat_id_calibration/probability_model.py
+Related files: combat_id_calibration/feature_extraction.py, combat_id_calibration/calibrator.py
+
+Overview
+--------
+probability_model.py implements a discriminative probability assignment layer for combat-ID attribution. It takes rows of evidence for competing platform/operator-nation hypotheses for one contact at one observation time, converts each candidate row into a logit, optionally adds a geographic operator-nation proximity adjustment, and normalizes the adjusted logits into probabilities with softmax. If a fitted temperature calibrator is supplied, the softmax uses that temperature to improve calibration of confidence.
+
+The model should be interpreted as assigning probabilities relative to the candidate set being scored, not as assigning global probabilities over every possible platform or operator nation.
+
+Candidate-Set Assumption
+------------------------
+Input rows are grouped by scenario_id, contact_id, and observation_time. Each group is treated as a mutually competing set of candidate hypotheses. The output probabilities therefore mean:
+
+    P(candidate_i | evidence, candidate_set)
+
+The probability mass is normalized within the group. If the candidate set omits the true platform or operator nation, the model will still distribute probability among the provided alternatives.
+
+Feature-to-Logit Model
+----------------------
+Each candidate row becomes a baseline logit. If the row already has a feature_logit field, that value is used directly. Otherwise, the row is converted into ContactHypothesisFeatures and scored using the deterministic feature_logit function from feature_extraction.py.
+
+The baseline scoring model is a weighted linear model:
+
+    z_i = sum_j w_j * x_ij
+
+where z_i is the baseline logit for candidate i, x_ij is feature j for candidate i, and w_j is the default feature weight. The default features include supporting path count, contradicting path count, mean source reliability, recency, shortest graph path to platform class, emission match score, kinematic match score, and contradiction score.
+
+Positive evidence, such as supporting paths, source reliability, recency, emission matches, and kinematic matches, increases the logit. Negative evidence, such as contradicting paths, long graph distance, and contradiction score, decreases it. These feature logits are evidence scores rather than probabilities.
+
+Geographic Operator-Nation Evidence
+-----------------------------------
+When emitter latitude and longitude are available, probability_model.py adds geographic evidence to the candidate logit. The model estimates the distance from the emitter to the hypothesized operator nation's nearest modeled border point. If no border polygon is available, it falls back to row-supplied country coordinates or a known country centroid.
+
+The distance evidence is converted into an exponentially decaying proximity score:
+
+    proximity_score = exp(-distance_km / 2000)
+
+The proximity score is then converted into a logit adjustment:
+
+    distance_logit_adjustment = 1.25 * proximity_score
+
+The final adjusted candidate logit is:
+
+    z'_i = z_i + distance_logit_adjustment_i
+
+If no geographic evidence is available for a candidate, its distance adjustment is zero. Because the adjustment is added in logit space, it acts as a multiplicative factor on the candidate's unnormalized softmax weight.
+
+Distance Geometry
+-----------------
+Point-to-point distances use the haversine formula with an Earth radius of 6371.0088 km. Distance to a border polygon is approximated by projecting latitude/longitude into a local kilometer coordinate system, finding the nearest point on each border segment, and choosing the minimum haversine distance. This is a lightweight, dependency-free geospatial approximation rather than a full geodesic polygon-distance implementation.
+
+Softmax Probability Assignment
+------------------------------
+After logits are adjusted, they are normalized with softmax:
+
+    P_i = exp(z'_i / T) / sum_k exp(z'_k / T)
+
+where T is the temperature. Without a calibrator, T = 1.0 and the model reports the calibration method as softmax_uncalibrated_baseline. Softmax converts unbounded relative evidence scores into a probability simplex whose candidate probabilities sum to 1 within the candidate group.
+
+Temperature Calibration
+-----------------------
+If a TemperatureCalibrator is provided, the softmax uses the calibrator's fitted temperature. Temperature scaling preserves candidate ranking because all logits are divided by the same positive scalar. It changes only the confidence spread of the distribution:
+
+- T > 1 softens probabilities and reduces overconfidence.
+- T < 1 sharpens probabilities and increases confidence.
+- T = 1 leaves logits unchanged.
+
+The calibrator is fit by minimizing negative log likelihood over labeled examples, using deterministic golden-section search over log-temperature. This makes calibration a post-processing step: the feature model determines relative ranking, and temperature scaling adjusts probability confidence.
+
+Marginal Platform and Operator-Nation Distributions
+---------------------------------------------------
+Candidate probabilities are first assigned at the row level. The model then marginalizes them into platform and operator-nation distributions by summing probabilities for rows that share the same platform or operator nation:
+
+    P(platform = p) = sum_i P(candidate_i) for candidates whose platform_i = p
+
+    P(operator_nation = o) = sum_i P(candidate_i) for candidates whose operator_nation_i = o
+
+This matters because multiple rows may refer to the same platform or same operator nation while differing in emitter, operator, or other evidence context.
+
+Interpretation
+--------------
+The model is best understood as a transparent, auditable, feature-based softmax classifier with optional geographic evidence and optional post-hoc calibration. It is not a full Bayesian generative model and does not learn its default feature weights inside probability_model.py. Its probabilities are conditional on the supplied candidate set and are empirically calibrated only when a fitted temperature model is used.
