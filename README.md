@@ -124,6 +124,10 @@ python -m combat_id_calibration explain probability-assignments.jsonl explanatio
 
 Explanation payloads include the calibrated platform and country distributions, confidence-limit warnings, supporting evidence, contradicting evidence, missing evidence, and recommended collection prompts. This keeps the LLM downstream of the calibrated probability model as required by `GraphDB_Probability_Architecture_Seed.txt`.
 
+See [Passing Combat-Identification Results to an LLM](RESULTS_TO_LLM.md) for the
+complete hand-off process, payload and prompt formats, current integration
+boundary, and intended human-readable output.
+
 
 ## Usage
 
