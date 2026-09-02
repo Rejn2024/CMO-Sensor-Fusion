@@ -62,6 +62,15 @@ A companion notebook, [`notebooks/wikipedia_airborne_radars_neo4j_kg.ipynb`](not
 
 
 
+### 3D aircraft-motion visualization
+
+The reusable `combat_id_calibration.aircraft_motion` module parses the latitude, longitude, heading, altitude, and speed fields emitted by `event_export_lua_02.lua`, converts geographic coordinates into a local east/north frame, and renders speed-coloured 3D trajectories with heading arrows. See [`notebooks/cmo_aircraft_motion_3d.ipynb`](notebooks/cmo_aircraft_motion_3d.ipynb) for a complete demonstration using either a CMO Lua-history file or self-contained sample data.
+
+```bash
+python -m pip install -e '.[visualization]'
+jupyter notebook notebooks/cmo_aircraft_motion_3d.ipynb
+```
+
 ### CMO emission-observation ingestion
 
 `event_export_lua_02.lua` emits `PY_CONTACT_LOG` lines that are treated as Phase-2 graph observations. The `ingest-cmo-observations` command parses each line into a typed ontology and writes it into the same Neo4j database used by the Wikipedia airborne-radar notebook. This route keeps static reference facts from Wikipedia and dynamic CMO observations in one evidence graph: Wikipedia-derived `Entity`/`FACT` records can support candidate identity hypotheses, while CMO-derived `Observation`, `Contact`, `Sensor`, `Emission`, `Platform`, and `PlatformClass` records provide timestamped operational evidence.

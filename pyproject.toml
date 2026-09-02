@@ -16,3 +16,7 @@ graph = [
   "neo4j>=5",
   "pypdf>=4",
 ]
+visualization = [
+  "jupyter>=1",
+  "matplotlib>=3.8",
+]
